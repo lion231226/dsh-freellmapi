@@ -522,20 +522,35 @@ test('★ a plain 400 request error does not park the pair', async () => {
 })
 
 test('★ a mid-stream failure does not park the provider', async () => {
+  // The break is **test-driven**: the mock keeps the stream open and exposes a
+  // `breakConnection` handle, and the test fires it only after it has seen the
+  // plugin emit text. A blind `setTimeout(() => socket.destroy(), 25)` could fire
+  // before the client read those frames, which turns this into the completely
+  // different "failed before any output" case — where failover *is* allowed and
+  // where a zero-failure snapshot is expected.
+  let breakConnection
   const pool = await startMockPool([
     {
       id: 'flakymock',
       models: [{ id: 'flaky', capability: 5, speed: 5 }],
-      respond: ({ response }) => {
+      respond: ({ response, breakConnection: breakNow }) => {
         writeSse(response, [chunk('one '), chunk('two ')], { end: false })
-        setTimeout(() => response.socket?.destroy(), 25)
+        breakConnection = breakNow
         return true
       },
     },
   ])
   try {
     const mounted = mountPlugin({ config: { mode: 'direct', providers: pool.config } })
-    await collect(mounted.adapter.stream(ask('hello')))
+    let deltas = 0
+    const result = assertValidChunkSequence(await collect(mounted.adapter.stream(ask('hello')), (entry) => {
+      if (entry.type !== 'text-delta') return
+      deltas += 1
+      // Handshake: both frames have demonstrably reached DSH already.
+      if (deltas === 2) breakConnection()
+    }))
+    assert.equal(deltas, 2, 'both frames must have reached the caller before the break')
+    assert.equal(result.finish.kind, 'error', 'a truncated stream ends in error, not in a clean stop')
     const snapshot = mounted.adapter.health.snapshot('flakymock', 'flaky')
     assert.equal(snapshot.failures, 1, 'one interrupted stream is a weak signal and only counts')
     assert.equal(snapshot.cooldownUntil, 0, 'but it must not park the provider')
@@ -569,14 +584,18 @@ test('every candidate failing yields a readable ALL_CANDIDATES_FAILED finish', a
 // ---------------------------------------------------------------------------
 
 test('★ a provider that breaks mid-stream is never replaced by another one', async () => {
+  // Same handshake as above: the standby is only tempting if the break can happen
+  // *before* any output, and this test exists to prove the opposite ordering. The
+  // break therefore fires from the collector, after two text deltas have crossed
+  // the adapter boundary — never from a timer.
+  let breakConnection
   const pool = await startMockPool([
     {
       id: 'flakymock',
       models: [{ id: 'flaky', capability: 5, speed: 5 }],
-      respond: ({ response }) => {
+      respond: ({ response, breakConnection: breakNow }) => {
         writeSse(response, [chunk('one '), chunk('two ')], { end: false })
-        // Deliver the two frames, then drop the connection.
-        setTimeout(() => response.socket?.destroy(), 25)
+        breakConnection = breakNow
         return true
       },
     },
@@ -585,8 +604,14 @@ test('★ a provider that breaks mid-stream is never replaced by another one', a
   try {
     clearRecentRoutes()
     const mounted = mountPlugin({ config: { mode: 'direct', providers: pool.config } })
-    const result = assertValidChunkSequence(await collect(mounted.adapter.stream(ask('hello'))))
+    let deltas = 0
+    const result = assertValidChunkSequence(await collect(mounted.adapter.stream(ask('hello')), (entry) => {
+      if (entry.type !== 'text-delta') return
+      deltas += 1
+      if (deltas === 2) breakConnection()
+    }))
 
+    assert.equal(deltas, 2, 'both frames must have reached the caller before the break')
     assert.equal(pool.requests('flakymock').length, 1)
     assert.equal(pool.requests('standbymock').length, 0, '★ the standby provider must not receive a second request')
     assert.equal(result.finish.kind, 'error')

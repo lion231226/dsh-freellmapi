@@ -93,10 +93,23 @@ export function reasoningChunk(text) {
   return { id: 'chatcmpl-1', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }] }
 }
 
-/** Collect an async iterable into an array. */
-export async function collect(iterable) {
+/**
+ * Collect an async iterable into an array.
+ *
+ * @param {AsyncIterable<any>} iterable
+ * @param {(chunk: any) => void | Promise<void>} [onChunk] called after each chunk
+ *   has crossed the adapter boundary. This is the handshake that lets a test act
+ *   on an **observed** event — "the plugin has already emitted content" — instead
+ *   of guessing with a wall-clock timer, which is what made the mid-stream
+ *   invariant tests flaky.
+ * @returns {Promise<any[]>}
+ */
+export async function collect(iterable, onChunk = undefined) {
   const out = []
-  for await (const item of iterable) out.push(item)
+  for await (const item of iterable) {
+    out.push(item)
+    if (onChunk !== undefined) await onChunk(item)
+  }
   return out
 }
 

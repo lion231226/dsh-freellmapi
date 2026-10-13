@@ -703,3 +703,118 @@ ON  llm7         keyless    https://token.llm7.io/
 ON  kilo         keyless    (null)   ← keyless，永不产出引导项
 off github / zhipu / volcengine / longcat / nvidia / ovh   (null)   ← 无取证，不编造
 ```
+
+### 12.16 T18：引导项被选中时，答复必须**就是**那条引导
+
+用户（李刚）重启后截图显示 v0.3.0 的列表完全正确，但拖动选中态落在了 `Groq ▸ needs GROQ_API_KEY` 那一行上。实测"真点它会怎样"：
+
+```text
+finish  : error
+code    : UNKNOWN_MODEL
+message : dsh-freellmapi: no provider in the pool serves the model id "setup:groq".
+          Select "auto" to let the plugin pick a model that is actually available.
+```
+
+**标签在引导，行为在误导**：整段话没提 key（而这行的全部意义就是让你去配 key）、把一条**我们自己播发**的引导项当成拼错的模型名、还建议改用 `auto`——等于让用户放弃他本来想配的那家。同期 `resolveModel('setup:groq').name` 返回裸 id `setup:groq`，而 `listModels()` 里同一条是友好文案，**同一个实体两个名字**。
+
+**修法**：`setup:` 前缀在严格路径里**先于**钉模型判定被识别（用 `catalog.js::SETUP_MODEL_PREFIX`，没有第二处字符串常量）：
+
+| 输入 | 分支 | code |
+|---|---|---|
+| `setup:groq`（provider 在池里） | 引导分支 | **`SETUP_REQUIRED`** |
+| `setup:nosuchprovider`（provider 不在池里） | 未知模型分支 | `UNKNOWN_MODEL` |
+| `totally-made-up-model-xyz` | 未知模型分支 | `UNKNOWN_MODEL` |
+| `llama-3.3-70b-versatile`（真模型、无 key） | 缺凭据分支 | `MISSING_CREDENTIAL` |
+
+**message 与列表同源**：新抽出的 `catalog.js::setupModelEntry(runtimeProvider, providerId, declaration)` 是这条实体的唯一构造器，`buildDirectCatalog()`、`#modelInfo()`（`resolveModel` / `prepareCall`）与 `setupRequiredFailure()` 三处都调它。于是
+
+- message **逐字等于** picker 里那条的 `description`（前一句就是 `setupHint()` 的文案）；
+- `resolveModel(id).name === listModels()` 里同一条的 `name`（有测试断言相等，`prepareCall` 也一并断言）；
+- 想改文案只改一处，三处一起变。
+
+**为什么用专用码 `SETUP_REQUIRED` 而不是复用 `MISSING_CREDENTIAL`**：这是**两种不同的用户动作**。`MISSING_CREDENTIAL` 表示"你要的是一个真模型，但这台机器服务不了它"；`SETUP_REQUIRED` 表示"你点的是那条专门用来提示你去配 key 的引导行"。分开还有一个实际好处：`UNKNOWN_MODEL` 的语义因此一点都不用动——真正的拼写错误仍然走它，三条分支各有各的修法。测试里专门断言了 `setup:` 与拼错模型的 **code 不相等**，以及引导文案里**不出现** `no provider in the pool serves` 这句未知模型措辞。
+
+`setup:` 行依旧**不发任何上游请求**，并且现在连凭据 seam 都不碰（有断言：`credentials.resolve` 调用次数为 0）——这行的存在前提就是凭据缺失，为它去解析凭据是自相矛盾的。
+
+### 12.17 T19：contextWindow 数据错误 + 上下文溢出应当换更大的家
+
+用户真实会话（29.7 万 token）撞上的报错：
+
+```text
+dsh-freellmapi: the request exceeds the context window of the model the router selected;
+compact the session or lower the attached history, then retry
+— [model=nvidia/nemotron-3-super-120b-a12b:free status=400]
+— upstream said: This endpoint's maximum context length is 262144 tokens.
+  However, you requested about 297538 tokens.
+```
+
+#### 12.17.1 主因：一个错数据同时造成"选错"和"排除了对的"
+
+`kilo` 四家的 `contextWindow` 全错，而且**两个方向都错**：
+
+| model | 修复前声明 | 上游实测（2026-10-13 `GET https://api.kilo.ai/api/gateway/models`） |
+|---|---|---|
+| `nvidia/nemotron-3-super-120b-a12b:free` | 1,000,000 | **262,144**（虚报 4 倍） |
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | 131,072 | **1,000,000**（少报 8 倍） |
+| `poolside/laguna-s-2.1:free` | 131,072 | **262,144** |
+| `cohere/north-mini-code:free` | 131,072 | **256,000** |
+
+于是路由**以为** super 能装 100 万 → 选它 → 上游 400；而**真正能装 100 万的 ultra 被标成 131k，被上下文闸门在 dispatch 之前就排除了**。一个数字同时毁掉两端。
+
+**复核结果**（`source` 字段逐条写明来源与日期）：
+
+- **实测**：`kilo` 四家 + `llm7` 两家（`DeepSeek-V4-Flash-0731` = 400000、`codestral-latest` = 32000，与既有值一致）。llm7 的字段是嵌套的 `context_window.tokens`。
+- **仍是估计**：`groq` / `cerebras` / `openrouter` / `github` / `mistral` / `zhipu` / `volcengine` / `longcat` / `nvidia` —— 这些家的 `/v1/models` 无凭据一律 **403**；`ovh` 虽然 200，但**根本不发布** context 字段。这些值保持原样并在文件头注明是目录估计值，**没有编造任何一个数字**。
+
+#### 12.17.2 估算偏低 ⇒ 闸门必须保守（安全裕度）
+
+估算器是启发式的（CJK ≈ 1 token/字，其余 ≈ 4 字符/token），对真实 297,538 token 的会话给出的是**偏小**的值，所以它从 262,144 的闸门底下溜了过去。
+
+新增 `routing.contextSafetyFactor`（默认 **1.15**，可配置）：候选必须满足 `contextWindow >= estimate * contextSafetyFactor`。
+
+**非法值怎么处理**（实测口径，与 README 一致）：`config.js` 用的是 `numberField(value, DEFAULT, { min: 1 })`，所以
+
+| 输入 | 结果 | 原因 |
+|---|---|---|
+| `1` | `1` | **合法**——等于"不要裕度"，此时闸门退化为 `estimate > contextWindow` 才排除 |
+| `0.5` / `0` / 负数 | **1.15** | 小于 `min: 1` ⇒ **该值被拒绝、回落到默认**（不是"夹到 1"） |
+| `'abc'` / `NaN` / `null` | **1.15** | 非有限数 ⇒ 同样回落默认 |
+
+即裕度**永远不会低于 1**，但靠的是"拒绝并回落默认"而非钳位。`router.js` 里另有一层 `safetyFactor < 1 → 1` 的防御，只对**绕过 `normalizeConfig` 直接调用 `rankCandidates()` 的调用方**生效（单测就是这么调的）；正常配置路径到不了那里。
+
+宁可少选一个"可能刚好装下"的模型，也不要发出去被上游 400 打回——前者的代价是一点选型质量，后者的代价是整单失败。
+
+#### 12.17.3 上下文溢出改为**只向更宽的家**换
+
+上游的 `maximum context length` 措辞本来就被 DSH 的 `isContextWindowExceededError` 认成 `CONTEXT_WINDOW_EXCEEDED`（归类一直是对的，问题在于它是**终结性**的）。现在：
+
+- `dispatch.js::isRetryableStatus()` 把该 code 判为**可换家**（与 `model_unavailable` 同族：请求没问题，这个候选装不下）。
+- 换家有**方向约束**：`minimumContextWindow` 记录已经拒绝过的最大窗口，循环跳过所有 `contextWindow <= 它` 的候选。换一个更小的没有意义。
+- **硬不变量不动**：一旦已向 DSH 吐出过 chunk，仍然绝不换家（`STREAM_INTERRUPTED`）。
+- 全池都装不下时，错误信息给出**本次估算 token**、**拒绝它的那个窗口**、**池内最大 contextWindow 及其模型名**，以及可操作建议。
+
+**冷却语义（自行裁决并记录在此）**：上下文溢出**完全不记 failure、也不冷却**。它没坏——同一个模型换一个短请求照样正常服务；把它 park 几分钟属于误判。真正有用的信息是它刚告诉我们的那个窗口，而闸门（含裕度）下次就会用上它。这一条有测试断言 `cooldownUntil === 0 && failures === 0`。
+
+#### 12.17.4 这次 mock 的盲区：它从不强制执行自己声明的约束
+
+历轮的 mock 校验模型名、校验请求体形状，却**从不校验请求体大小**，所以"把装不下的请求发给这个模型"整类不可见——和当年"不校验模型名"是同一个毛病：**mock 没有强制执行它所模拟系统的约束**。
+
+`tests/helpers/pool.mjs` 现在让每个端点**强制执行自己声明的 `contextWindow`**：超限就回 `400 {"error":{"message":"This endpoint's maximum context length is N tokens. However, you requested about M tokens.","code":"context_length_exceeded"}}`（照上游真实形状），并记进 `overflows`。强制执行用的窗口直接取自池里声明的同一个数字（`startMockPool` 一次传入），所以改测试模型的窗口会同时改它的模拟上限，两者不可能漂移；`setContextWindow()` 可以单独压低强制值，用来模拟"目录漂移"（声明 1M、实际只给 100k）。
+
+`tests/context-window.test.mjs`（14 条）覆盖：数据表断言、池内最大窗口能装下 297,538、裕度与边界（9200 够 / 8199 不够）、**30 万 token 请求选中装得下的那个且 262,144 那个一次都没被请求**、上游 400 后**只向更宽的换**、溢出**不冷却**、全池装不下时的 message 含估算与池内最大值、**吐过 chunk 后不换家**、以及一条元断言"mock 真的会拒绝超限请求"。
+
+#### 12.17.5 复现脚本的额外收获
+
+`t19-repro.mjs` 用真实 kilo 数值跑同一请求两次（只改"池子声明什么"，端点始终按真实窗口强制执行）：
+
+```text
+A. BEFORE  declared super=1,000,000 / ultra=131,072
+   super asked: 1 (400s: 1)   ultra asked: 0   finish: error / CONTEXT_WINDOW_EXCEEDED
+   → 用户的事故原样复现；且因为 ultra 被声明得**更小**，连新的换家规则也救不了它
+     （换家只向更宽的方向走）——数据错误就是致命的。
+B. AFTER   declared super=262,144 / ultra=1,000,000
+   super asked: 0   ultra asked: 1   finish: stop, answer "ULTRA"
+   → 一次请求直达能装下的那家。
+```
+
+这个脚本当场抓出一个单测没覆盖的缺陷：`contextOverflowFailure(plan, attempts, minimumContextWindow)` **实参顺序传反**（签名是 `(plan, refusedUpTo, attempts)`），只有在"先真打过一次、再没有更宽的候选"这条路径上才会暴露成 `attempts.map is not a function`。已修，并补了对应的单测。

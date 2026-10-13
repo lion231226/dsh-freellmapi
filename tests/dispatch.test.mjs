@@ -39,13 +39,29 @@ function sseResponse(chunks, headers = {}) {
   return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream', ...headers } })
 }
 
-/** A 200 SSE response that breaks after the given prefix has been consumed. */
-function brokenSseResponse(chunks) {
+/**
+ * A 200 SSE response that breaks **after every supplied chunk has been pulled**.
+ *
+ * The earlier version enqueued everything up front and errored the stream from a
+ * 10 ms timer. That races the reader: on a busy CPU the error could arrive before
+ * the chunks were read, which is a different scenario entirely (a failure *before*
+ * any output, where failover is permitted) and made the invariant assertions
+ * nondeterministic.
+ *
+ * `pull()` is only called when the consumer actually wants more data, so ordering
+ * is now guaranteed by the stream protocol rather than by wall-clock time.
+ */
+function brokenSseResponse(chunks, error = new Error('socket reset by peer')) {
   const encoder = new TextEncoder()
+  let index = 0
   const body = new ReadableStream({
-    start(controller) {
-      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
-      setTimeout(() => controller.error(new Error('socket reset by peer')), 10)
+    pull(controller) {
+      if (index < chunks.length) {
+        controller.enqueue(encoder.encode(chunks[index]))
+        index += 1
+        return
+      }
+      controller.error(error)
     },
   })
   return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })

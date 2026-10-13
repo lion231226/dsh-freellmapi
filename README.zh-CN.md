@@ -363,6 +363,31 @@ assistant 消息，比诚实地失败更糟。这条规则被实现了**两遍**
 - 尝试次数受 `routing.maxAttempts`（默认 6）与 `routing.budgetMs`（默认 45 000 毫秒）限制，两者都在
   每次尝试**之前**检查。
 
+### 请求本身实在太大时
+
+会话可能长过路由器选中的候选。上游对此回 `400`（`maximum context length … However, you requested
+about N tokens`），插件把它当成**逐候选**的状况，而不是死路：
+
+- **会换家——但只往上下文更大的方向换。** 不宽于刚刚拒绝它的那个窗口的候选会被直接跳过，因为拿一个
+  更小的模型重试同一个超大请求不可能成功。（已实测：候选窗口分别是 131 072 / 100 000 / 262 144 时，
+  100 000 那个一次都没被请求过。）
+- **这次拒绝不让候选付出任何代价。** 它不会被停车、也不计失败——这个模型是健康的，换一个短请求照样
+  服务。真正有用的记忆是它刚报出来的那个窗口，闸门（连同 `routing.contextSafetyFactor`）下一次就会用上。
+- **硬不变量不变。** 只要已经有 chunk 吐给 DSH，就完全不换家（`STREAM_INTERRUPTED`）；本次改动没有
+  碰这条规则。
+
+当池子里没有一家装得下时，错误会把你需要的两个数字都给你——你的请求有多大，以及最宽的可达模型有多大：
+
+```text
+dsh-freellmapi: this request does not fit any model the router can use; it is about 297538 estimated input
+tokens; the widest model that refused it declares 262144 tokens; the largest context window in the pool is
+262144 (kilo/nvidia/nemotron-3-super-120b-a12b:free); compact the session or lower the attached history,
+then retry. — [kilo/small-model → CONTEXT_WINDOW_EXCEEDED; kilo/wide-model → CONTEXT_WINDOW_EXCEEDED]
+```
+
+（上面的换行只是为了排版；真实 message 是一行。）这件事同时也是个数据问题，所以上下文窗口的准确性写在
+[限制](#上下文窗口哪些是实测哪些是估计)一节里。
+
 终结性结局，全部以带内 `finish` chunk 交付，而不是抛异常：
 
 | 错误码 | 含义 |
@@ -449,6 +474,7 @@ mode: gateway            # 默认是 "direct"；gateway 还需要 baseURL 与一
 |---|---|---|
 | `maxAttempts` | `6` | 单个请求最多试几个候选 |
 | `budgetMs` | `45000` | 故障转移总时间预算；`0` = 不限 |
+| `contextSafetyFactor` | `1.15` | 上下文闸门的安全裕度：候选必须满足 `contextWindow >= 估算 token × 该系数`。token 估算是启发式的、**偏低**，所以宁可保守一个模型，也不要用上游的 400 换。小于 `1` 的值会被拒绝并改用默认值 |
 | `thresholds.medium` | `0.34` | 分数到多少就从 `simple` 变 `medium` |
 | `thresholds.complex` | `0.67` | 分数到多少就从 `medium` 变 `complex` |
 | `weights` | 逐档默认 | `{capability, speed}`，或 `{simple: {…}, medium: {…}, complex: {…}}` |
@@ -687,9 +713,8 @@ Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
    往返序列化自己的状态，但没有任何代码把它写进磁盘。
 10. **故障转移后的答案来自另一个模型。** 第 1 名失败时由第 2 名作答，而它们是不同的模型。这很安全
     （此时什么都没发出去），并且完整记录在路由记录的 `attempts` 里，但答案不是排名最高那个模型给的。
-11. **`nvidia` 的 `parallel_tool_calls: false` 要求"声明了但没生效"。** 池条目里带着它，但请求体从来
-    没收到过（这份声明在到达 wire 之前就丢了）。NVIDIA 默认关闭，所以不会影响默认安装；要开就请预期
-    可能遇到并行工具调用被拒。
+11. **`nvidia` 需要 `parallel_tool_calls: false`。** 部分 NIM 模型拒绝并行工具调用，池条目已声明该标志，
+    并且会真的写进请求体。NVIDIA 仍默认关闭（试用版 ToS、首字节可能要几分钟、限流紧）。
 12. **`routing.weights` / `routing.thresholds` 是高级字段**，设置页里没有渲染表单（它们是 `z.any()`
     载荷）。请在 profile patch 里改。
 13. **v0.1.0 那轮验证遗留项的现状**（已按本实现重新核实）：`maxTokens` 超过
@@ -697,6 +722,40 @@ Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
     （`INVALID_MODEL_MAX_TOKENS`）；`role: "user"` 且 `content` 为纯字符串的消息仍会被发成空内容；
     gateway 模式下 `includeFusion: false` 仍可能被网关自报的 `fusion` 抵消；`discover()` 仍可能返回重复
     id（DSH 会去重）。`L1`——失败码清单不全——已修。
+
+### 上下文窗口：哪些是实测、哪些是估计
+
+每个模型的 `contextWindow` 决定这个请求**要不要发**（见[请求本身实在太大时](#请求本身实在太大时)），
+所以数字错了会**两头都伤人**：报大了，路由器会挑一个必然拒绝你的模型；报小了，一个本来装得下的模型在
+发出第一个字节之前就被筛掉了。
+
+`kilo` 这四家恰好就是两个方向都错，已于 2026-10-14 按 kilo 自己的 `GET /api/gateway/models` 更正：
+
+| 模型 | 修前 | 修后（实测） |
+|---|---|---|
+| `kilo/nvidia/nemotron-3-super-120b-a12b:free` | 1 000 000 | **262 144** |
+| `kilo/nvidia/nemotron-3-ultra-550b-a55b:free` | 131 072 | **1 000 000** |
+| `kilo/poolside/laguna-s-2.1:free` | 131 072 | **262 144** |
+| `kilo/cohere/north-mini-code:free` | 131 072 | **256 000** |
+
+**池里其余各家的 contextWindow 仍然是目录估计，不是实测。** 那些家的 `GET /v1/models` 在没有凭据时
+一律 `403`，而 OVH 的端点虽然回 `200`，却**根本不发布** context 字段。`lib/providers.js` 里每个条目的
+`source` 注明了它的数字从哪来、什么时候来的——凡是没有写 "measured" 的，都请当作估计值。`llm7` 的两条是
+除上述四家之外唯一的实测行（它的端点发布 `context_window.tokens`）。
+
+如果你的环境里某家报出的窗口不同，逐模型覆盖即可，不用改代码：
+
+```yaml
+providers:
+  groq:
+    models:
+      - id: llama-3.3-70b-versatile
+        name: Llama 3.3 70B
+        capability: 4
+        speed: 5
+        contextWindow: 131072     # 你的数字说了算
+        toolCalling: true
+```
 
 ## 兼容性
 

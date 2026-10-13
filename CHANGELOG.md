@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.3.1] - 2026-10-14
+
+**A wrong context window was doing damage in both directions** — this release follows a real session that
+sent 297 538 tokens to a model whose actual limit is 262 144.
+
+### Fixed
+
+- **Wrong `contextWindow` for all four `kilo` models**, measured against kilo's own `GET /api/gateway/models`.
+  The single bad number set caused two opposite failures: `nemotron-3-super-120b-a12b:free` was overstated
+  at 1 000 000 (so the router picked it for a 297k-token request and upstream answered `400`) while
+  `nemotron-3-ultra-550b-a55b:free` was understated at 131 072 (so the model that *could* have served the
+  request was filtered out by the context gate before it was ever tried). `poolside/laguna-s-2.1:free` and
+  `cohere/north-mini-code:free` were corrected as well.
+- **A context-window overflow now fails over instead of ending the request.** Upstream's `400
+  "maximum context length"` was terminal; it is now a per-candidate condition that moves to a candidate with
+  a **larger** context window (a smaller one cannot succeed, so the loop only moves in that direction). The
+  refused candidate is neither cooled down nor counted as a failure, because it is healthy — the same model
+  serves a shorter request fine. The hard invariant is untouched: once any chunk has reached DSH there is
+  still no failover, and the stream ends with `STREAM_INTERRUPTED`.
+- **A crash in the "nothing fits" path.** `contextOverflowFailure` was called with its arguments in the
+  wrong order (`(plan, attempts, minimumContextWindow)` instead of `(plan, refusedUpTo, attempts)`), which
+  threw `attempts.map is not a function` — but only on the path where a request had already been refused
+  once *and* no wider candidate remained. The message now also reports the estimated request size and the
+  widest model in the pool.
+- **Per-provider `extraBody` / `extraHeaders` declarations now reach the wire**, closing the limitation
+  recorded under 0.2.0. They were being dropped while the provider declaration was rebuilt, so
+  `nvidia`'s required `parallel_tool_calls: false` never made it into a request body.
+
+### Added
+
+- **`routing.contextSafetyFactor`** (default `1.15`): the context gate now requires
+  `contextWindow >= estimated tokens × this factor`. The token estimate is a heuristic and undercounts — a
+  real 297 538-token session was estimated below 262 144 and slipped through the gate — so one model of
+  headroom is cheaper than an upstream `400`. Values below `1` are rejected and the default applies.
+
 ## [0.3.0] - 2026-10-13
 
 **A pinned model is now honoured or refused — never quietly replaced.**
@@ -215,7 +250,8 @@ fixed in 0.1.0.
   the plugin refuse to load with a message naming the conflict; remove one of the two.
 - MIT licensed.
 
-[Unreleased]: https://github.com/lion231226/dsh-freellmapi/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/lion231226/dsh-freellmapi/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/lion231226/dsh-freellmapi/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/lion231226/dsh-freellmapi/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lion231226/dsh-freellmapi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lion231226/dsh-freellmapi/releases/tag/v0.1.0

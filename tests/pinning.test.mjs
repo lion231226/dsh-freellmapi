@@ -374,6 +374,129 @@ test('the zero-credential default pool advertises only reachable models plus gui
 })
 
 // ---------------------------------------------------------------------------
+// selecting a guidance row must answer with that guidance
+// ---------------------------------------------------------------------------
+
+test('★ selecting a setup row answers with the guidance itself, and dispatches nothing', async () => {
+  const pool = await twoProviderPool()
+  try {
+    clearRecentRoutes()
+    const mounted = mountPlugin({ config: { mode: 'direct', providers: withoutKey(pool) } })
+    const listed = await mounted.adapter.listModels('freellmapi')
+    const row = listed.find((entry) => entry.id === setupModelId('keyedmock'))
+    assert.ok(row, 'the fixture must produce a setup row')
+
+    const before = totalRequests(pool)
+    const result = assertValidChunkSequence(await collect(mounted.adapter.stream(ask(row.id))))
+
+    assert.equal(result.finish.kind, 'error')
+    assert.equal(result.finish.failure.code, 'SETUP_REQUIRED')
+    const message = result.finish.failure.message
+    // The label the user clicked and the answer they get come from one constructor.
+    assert.ok(message.startsWith(row.name), `the answer must open with the label: ${message}`)
+    assert.match(message, /PINNING_TEST_UNSET_KEY/, 'the message must name the exact environment variable')
+    assert.match(message, /DSH settings page/)
+    // ★ The regression: this used to be answered as a mistyped model id.
+    assert.equal(
+      /no provider in the pool serves/.test(message),
+      false,
+      'a guidance row must never be described as an unknown model',
+    )
+    assert.equal(totalRequests(pool), before, 'a guidance row must not dispatch anything')
+    assert.equal(result.blocks.length, 0)
+  } finally {
+    await pool.close()
+  }
+})
+
+test('★ every shipped setup row answers with its own guidance', async () => {
+  const mounted = mountPlugin({
+    config: { mode: 'direct' },
+    services: { credentials: { resolve: () => Promise.resolve(undefined) } },
+  })
+  const rows = (await mounted.adapter.listModels('freellmapi')).filter((entry) => entry.id.startsWith(SETUP_MODEL_PREFIX))
+  assert.deepEqual(rows.map((entry) => entry.id).sort(), ['setup:cerebras', 'setup:groq', 'setup:openrouter'])
+
+  for (const row of rows) {
+    const result = assertValidChunkSequence(await collect(mounted.adapter.stream(ask(row.id))))
+    assert.equal(result.finish.failure.code, 'SETUP_REQUIRED', `${row.id} must report SETUP_REQUIRED`)
+    const message = result.finish.failure.message
+    assert.ok(message.startsWith(row.name), `${row.id} answer must open with its label`)
+    assert.match(message, /needs [A-Z0-9_]+_API_KEY/, `${row.id} must name the env var`)
+    // The hint carries the *host*, not the full URL: "console.groq.com/keys".
+    assert.match(message, /\(free key: [^)]+\)/, `${row.id} must say where to get a key`)
+    assert.equal(/no provider in the pool serves/.test(message), false, `${row.id} must not be an unknown-model error`)
+  }
+  // The one that was broken: the label promised a console address, so the answer must too.
+  const cerebras = rows.find((row) => row.id === 'setup:cerebras')
+  const answer = assertValidChunkSequence(await collect(mounted.adapter.stream(ask('setup:cerebras'))))
+  assert.ok(answer.finish.failure.message.startsWith(cerebras.name))
+  assert.match(answer.finish.failure.message, /cloud\.cerebras\.ai/)
+})
+
+test('★ resolveModel and listModels agree on the name of a guidance row', async () => {
+  const mounted = mountPlugin({
+    config: { mode: 'direct' },
+    services: { credentials: { resolve: () => Promise.resolve(undefined) } },
+  })
+  const listed = await mounted.adapter.listModels('freellmapi')
+  for (const row of listed.filter((entry) => entry.id.startsWith(SETUP_MODEL_PREFIX))) {
+    const resolved = await mounted.adapter.resolveModel('freellmapi', row.id)
+    assert.equal(resolved.name, row.name, `${row.id}: one entity, one name`)
+    assert.equal(resolved.id, row.id)
+    assert.deepEqual(resolved.inputModalities, ['text'])
+  }
+  // The path a row takes through prepareCall must agree too.
+  const prepared = await mounted.adapter.prepareCall('freellmapi', setupModelId('groq'))
+  assert.equal(prepared.model.name, listed.find((entry) => entry.id === 'setup:groq').name)
+})
+
+test('★ a setup row takes a different branch from a genuinely mistyped model id', async () => {
+  const mounted = mountPlugin({
+    config: { mode: 'direct' },
+    services: { credentials: { resolve: () => Promise.resolve(undefined) } },
+  })
+  const setup = assertValidChunkSequence(await collect(mounted.adapter.stream(ask('setup:groq'))))
+  const typo = assertValidChunkSequence(await collect(mounted.adapter.stream(ask('totally-made-up-model-xyz'))))
+  const almostSetup = assertValidChunkSequence(await collect(mounted.adapter.stream(ask('setup:nosuchprovider'))))
+
+  assert.equal(setup.finish.failure.code, 'SETUP_REQUIRED')
+  assert.equal(typo.finish.failure.code, 'UNKNOWN_MODEL', 'fixing setup must not swallow the unknown-model branch')
+  assert.notEqual(setup.finish.failure.code, typo.finish.failure.code)
+  // A `setup:` id naming a provider that does not exist is still just unknown.
+  assert.equal(almostSetup.finish.failure.code, 'UNKNOWN_MODEL')
+  assert.match(almostSetup.finish.failure.message, /no provider in the pool serves/)
+  // And the two messages must not be interchangeable.
+  assert.equal(setup.finish.failure.message.includes('no provider in the pool serves'), false)
+  assert.equal(typo.finish.failure.message.includes('needs'), false)
+})
+
+test('a setup row is refused before any credential is resolved', async () => {
+  // The row exists precisely because the credential is missing; resolving it (or
+  // worse, dispatching with it) would defeat the point.
+  const pool = await twoProviderPool()
+  try {
+    let resolved = 0
+    const mounted = mountPlugin({
+      config: { mode: 'direct', providers: withoutKey(pool) },
+      services: {
+        credentials: {
+          resolve: () => {
+            resolved += 1
+            return Promise.resolve(undefined)
+          },
+        },
+      },
+    })
+    await collect(mounted.adapter.stream(ask(setupModelId('keyedmock'))))
+    assert.equal(resolved, 0, 'answering a guidance row must not touch the credential seam')
+    assert.equal(totalRequests(pool), 0)
+  } finally {
+    await pool.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
 // the key-application URL has exactly one source
 // ---------------------------------------------------------------------------
 

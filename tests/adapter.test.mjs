@@ -695,8 +695,11 @@ test('a caller abort during the response body is honoured', async () => {
   try {
     const { adapter } = mount(server.baseURL)
     const controller = new AbortController()
-    setTimeout(() => controller.abort(), 60)
-    const chunks = await collect(adapter.stream(request('auto', { signal: controller.signal })))
+    // Abort on an observed event — the first chunk has reached the caller — rather
+    // than on a wall-clock guess about when the body would be streaming.
+    const chunks = await collect(adapter.stream(request('auto', { signal: controller.signal })), (entry) => {
+      if (entry.type === 'text-delta') controller.abort()
+    })
     const { finish } = assertValidChunkSequence(chunks)
     assert.equal(finish.kind, 'aborted')
   } finally {

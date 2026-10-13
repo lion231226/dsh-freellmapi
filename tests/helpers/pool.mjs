@@ -85,18 +85,30 @@ export function model(model) {
  * `404 {"error":{"code":"model_not_found"}}` — exactly what Groq, Cerebras and
  * friends do — and recorded in `badModels`.
  *
+ * It also **enforces the context window** it advertises, the way the real
+ * endpoint does: a prompt that does not fit comes back as
+ * `400 {"error":{"message":"This endpoint's maximum context length is N tokens.
+ * However, you requested about M tokens."}}` and is recorded in `overflows`.
+ * Without that check a whole class of bug — "the router sent a 297k-token session
+ * to a 262k-token model" — is invisible to this suite, which is exactly how it
+ * reached a user.
+ *
  * @param {object} options
  * @param {readonly string[]} options.ids the model ids this endpoint really serves
+ * @param {Record<string, number>} [options.contextWindows] model id → the window
+ *   this endpoint enforces; ids missing from the map are not size-checked
  * @param {string} [options.answer] text returned by the default SSE responder
  * @param {(context: {request: any, response: import('node:http').ServerResponse, body: any, hits: number}) => boolean | void} [options.respond]
  *   custom responder; return `true` when it has fully handled the response
  * @param {boolean} [options.end] whether the default responder ends the response
- * @returns {Promise<{baseURL: string, requests: any[], badModels: any[], hits: number, close(): Promise<void>}>}
+ * @returns {Promise<{baseURL: string, requests: any[], badModels: any[], overflows: any[], hits: number, close(): Promise<void>}>}
  */
 export async function startProviderMock(options) {
   const ids = new Set(options.ids)
+  const windows = options.contextWindows ?? {}
   const requests = []
   const badModels = []
+  const overflows = []
   const state = { hits: 0 }
   const server = await startMockServer((request, response) => {
     state.hits += 1
@@ -116,8 +128,44 @@ export async function startProviderMock(options) {
       }))
       return
     }
+    const window = windows[body.model]
+    // `4` characters per token mirrors the plugin's own heuristic, so a test can
+    // reason about the number of characters it sends.
+    if (typeof window === 'number' && window > 0) {
+      const approx = approximateTokens(request.body)
+      if (approx > window) {
+        overflows.push({ model: body.model, window, requested: approx })
+        response.writeHead(400, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({
+          error: {
+            message: `This endpoint's maximum context length is ${window} tokens. However, you requested about ${approx} tokens.`,
+            type: 'invalid_request_error',
+            code: 'context_length_exceeded',
+          },
+        }))
+        return
+      }
+    }
     if (typeof options.respond === 'function') {
-      if (options.respond({ request, response, body, hits: state.hits }) === true) return
+      if (options.respond({
+        request,
+        response,
+        body,
+        hits: state.hits,
+        // The deterministic way to break a connection mid-stream: the test calls
+        // this once it has *observed* the plugin emit content, instead of hoping a
+        // `setTimeout` elapsed after the client read. `destroy()` never writes the
+        // chunked terminator, so the client always sees a truncated HTTP message
+        // whatever the timing — the only open question was whether the earlier
+        // frames had been read yet, and this handshake removes the question.
+        breakConnection: () => {
+          try {
+            response.socket?.destroy()
+          } catch {
+            // The socket may already be gone; that is not a test failure.
+          }
+        },
+      }) === true) return
     }
     writeSse(response, [
       chunk(options.answer ?? 'ok'),
@@ -129,11 +177,39 @@ export async function startProviderMock(options) {
     baseURL: server.baseURL,
     requests,
     badModels,
+    overflows,
+    /**
+     * Change the window this endpoint *enforces* without touching what the pool
+     * advertises. That is how a drifting catalogue behaves: the plugin believes
+     * one number and the endpoint applies another.
+     */
+    setContextWindow(id, tokens) {
+      windows[id] = tokens
+    },
     get hits() {
       return state.hits
     },
     close: server.close,
   }
+}
+
+/**
+ * A rough token count for the bytes a mock actually received.
+ *
+ * The plugin's estimator counts CJK characters as one token each and everything
+ * else as four characters per token. The mock uses the same rule on the raw body
+ * so that a test asserting "this request is too big for that window" is asserting
+ * something both sides agree on.
+ *
+ * @param {string} raw the request body exactly as it arrived
+ * @returns {number}
+ */
+export function approximateTokens(raw) {
+  let cjk = 0
+  for (const character of raw) {
+    if (/[\u3000-\u9fff\uff00-\uffef]/.test(character)) cjk += 1
+  }
+  return cjk + Math.ceil((raw.length - cjk) / 4)
 }
 
 /**
@@ -161,6 +237,10 @@ export async function startMockPool(specs, options = {}) {
     const models = spec.models.map((entry) => model(entry))
     const mock = await startProviderMock({
       ids: models.map((entry) => entry.id),
+      // The window the endpoint *enforces* is the same number the pool
+      // *advertises*, so the two can never drift: a test that raises a model's
+      // `contextWindow` raises the simulated limit with it.
+      contextWindows: Object.fromEntries(models.map((entry) => [entry.id, entry.contextWindow])),
       answer: spec.answer,
       respond: spec.respond,
       end: spec.end,
@@ -176,6 +256,9 @@ export async function startMockPool(specs, options = {}) {
     },
     badModels(id) {
       return endpoints.get(id)?.badModels ?? []
+    },
+    overflows(id) {
+      return endpoints.get(id)?.overflows ?? []
     },
     async close() {
       for (const mock of endpoints.values()) await mock.close()

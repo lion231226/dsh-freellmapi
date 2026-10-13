@@ -102,12 +102,37 @@ test('a context window smaller than the estimated input is excluded', () => {
     candidates: [candidate('small', 'ctx', { contextWindow: 8_000 }), candidate('big', 'ctx', { contextWindow: 131_072 })],
   }
   assert.deepEqual(ids(rankCandidates(input)), ['big/ctx'])
-  assert.match(explainExclusions(input)[0].reason, /12000 tokens exceed the 8000-token context window/)
+  assert.match(explainExclusions(input)[0].reason, /12000 tokens, plus a 1x safety margin, exceed the 8000-token context window/)
 })
 
-test('a candidate exactly at the context limit is kept', () => {
-  const input = { tier: 'medium', now: 0, tokens: 8_000, candidates: [candidate('exact', 'ctx', { contextWindow: 8_000 })] }
-  assert.deepEqual(ids(rankCandidates(input)), ['exact/ctx'])
+test('★ the context gate keeps a safety margin, because the estimate undercounts', () => {
+  // A real 297,538-token session was estimated at roughly 268k, slipped past a
+  // 262,144-token gate and came back as an upstream HTTP 400. The gate must be
+  // conservative: a candidate has to hold the estimate *plus* the margin.
+  const fits = candidate('fits', 'ctx', { contextWindow: 131_072 })
+  const tight = candidate('tight', 'ctx', { contextWindow: 8_000 })
+
+  const withMargin = { tier: 'medium', now: 0, tokens: 8_000, safetyFactor: 1.15, candidates: [tight, fits] }
+  assert.deepEqual(ids(rankCandidates(withMargin)), ['fits/ctx'], 'a window the estimate only just fits must be skipped')
+  assert.match(explainExclusions(withMargin)[0].reason, /plus a 1\.15x safety margin/)
+
+  // The margin is a knob, not a hardcoded number: lowering it to 1 restores the
+  // exact-fit behaviour on purpose.
+  const noMargin = { ...withMargin, safetyFactor: 1 }
+  assert.deepEqual(ids(rankCandidates(noMargin)).sort(), ['fits/ctx', 'tight/ctx'])
+
+  // Below 1 is not a valid margin and is clamped up, so it can never make the gate
+  // *less* conservative than the estimate itself.
+  const bogus = { ...withMargin, safetyFactor: 0.1 }
+  assert.deepEqual(ids(rankCandidates(bogus)).sort(), ['fits/ctx', 'tight/ctx'])
+})
+
+test('the margin is exactly at the boundary, not past it', () => {
+  // 8000 * 1.15 = 9200: a 9200-token window is enough, an 8000-token one is not.
+  const at = { tier: 'medium', now: 0, tokens: 8_000, safetyFactor: 1.15, candidates: [candidate('a', 'ctx', { contextWindow: 9_200 })] }
+  assert.deepEqual(ids(rankCandidates(at)), ['a/ctx'])
+  const below = { ...at, candidates: [candidate('a', 'ctx', { contextWindow: 9_199 })] }
+  assert.deepEqual(ids(rankCandidates(below)), [])
 })
 
 test('a cooling-down candidate is excluded and explained', () => {

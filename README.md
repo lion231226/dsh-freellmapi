@@ -382,6 +382,36 @@ Health and cooldowns:
 - Attempts are bounded by `routing.maxAttempts` (default 6) and `routing.budgetMs` (default 45 000 ms), both
   checked *before* each attempt.
 
+### A request that is simply too large
+
+A session can outgrow the candidate the router picked. Upstream answers that with a `400`
+(`maximum context length … However, you requested about N tokens`), and the plugin treats it as a
+**per-candidate** condition, not a dead end:
+
+- **It fails over — but only towards a bigger context window.** A candidate whose `contextWindow` is not
+  wider than the one that just refused the request is skipped, because retrying a too-large request on a
+  smaller model cannot succeed. (Verified: with candidates of 131 072 / 100 000 / 262 144 tokens, the
+  100 000 one is never contacted.)
+- **The refusal costs the candidate nothing.** It is not parked and does not count as a failure — the model
+  is healthy and would answer a shorter request fine. The useful memory is the window it just reported,
+  and the gate (plus `routing.contextSafetyFactor`) uses it next time.
+- **The hard invariant still holds.** If any chunk has already reached DSH, there is no failover at all
+  (`STREAM_INTERRUPTED`); this change did not touch that rule.
+
+When nothing in the pool is wide enough, the error tells you both numbers you need — how big your request
+is and how big the biggest reachable model is:
+
+```text
+dsh-freellmapi: this request does not fit any model the router can use; it is about 297538 estimated input
+tokens; the widest model that refused it declares 262144 tokens; the largest context window in the pool is
+262144 (kilo/nvidia/nemotron-3-super-120b-a12b:free); compact the session or lower the attached history,
+then retry. — [kilo/small-model → CONTEXT_WINDOW_EXCEEDED; kilo/wide-model → CONTEXT_WINDOW_EXCEEDED]
+```
+
+(The line breaks are added for readability here; the real message is one line.) The situation is also a
+data question, which is why the context windows are documented in
+[Limitations](#context-windows-what-is-measured-and-what-is-estimated).
+
 **Failures come back in-band, not as a crash.** Every outcome below ends the stream with a terminal
 `finish` chunk carrying a stable DSH code: no exception ever crosses the adapter boundary.
 
@@ -482,6 +512,7 @@ A provider that is not in the built-in pool at all is added the same way: give i
 |---|---|---|
 | `maxAttempts` | `6` | Maximum candidates tried for one request |
 | `budgetMs` | `45000` | Total failover time budget; `0` = unlimited |
+| `contextSafetyFactor` | `1.15` | Safety margin on the context gate: a candidate must satisfy `contextWindow >= estimated tokens × this factor`. The token estimate is a heuristic and **undercounts**, so one model of headroom is cheaper than a 400 from upstream. A value below `1` is rejected and the default applies |
 | `thresholds.medium` | `0.34` | Score at which `simple` becomes `medium` |
 | `thresholds.complex` | `0.67` | Score at which `medium` becomes `complex` |
 | `weights` | per-tier defaults | `{capability, speed}` or `{simple: {…}, medium: {…}, complex: {…}}` |
@@ -749,10 +780,9 @@ Stated plainly, so you know what you are relying on:
 10. **A failed-over answer comes from a different model than the first choice.** When candidate 1 fails,
     candidate 2 answers, and they are different models. That is safe (nothing was emitted yet) and fully
     recorded in the routing record's `attempts`, but the answer is not from the top-ranked model.
-11. **`nvidia`'s `parallel_tool_calls: false` requirement is declared but not applied.** The pool entry
-    carries it, but the request body never receives it (the declaration is dropped before it reaches the
-    wire). NVIDIA is disabled by default, so this cannot affect a default install; enable it expecting
-    possible parallel-tool-call rejections.
+11. **`nvidia` needs `parallel_tool_calls: false`.** Several NIM models reject parallel tool calls, so the
+    pool declares the flag and it is applied to the request body. NVIDIA still ships disabled by default
+    (trial-only ToS, minutes-long first token, tight limits).
 12. **`routing.weights` / `routing.thresholds` are advanced fields** with no rendered form in the settings
     page (they are `z.any()` payloads). Edit them in the profile patch.
 13. **Still open from the v0.1.0 verification round** (re-checked against this implementation):
@@ -761,6 +791,43 @@ Stated plainly, so you know what you are relying on:
     with empty content; in gateway mode `includeFusion: false` can still be undone by the gateway's own
     `fusion` entry; and `discover()` can still return duplicate ids (DSH de-duplicates them). `L1` — the
     incomplete failure-code list — is fixed.
+
+### Context windows: what is measured and what is estimated
+
+Every model's `contextWindow` decides whether a request is even attempted (see
+[A request that is simply too large](#a-request-that-is-simply-too-large)), so a wrong number hurts twice:
+too large and the router picks a model that will refuse the request; too small and a model that could have
+served it gets filtered out before the first byte.
+
+The four `kilo` models were wrong in exactly those two directions and were corrected on 2026-10-14 from
+kilo's own `GET /api/gateway/models`:
+
+| Model | Was | Now (measured) |
+|---|---|---|
+| `kilo/nvidia/nemotron-3-super-120b-a12b:free` | 1 000 000 | **262 144** |
+| `kilo/nvidia/nemotron-3-ultra-550b-a55b:free` | 131 072 | **1 000 000** |
+| `kilo/poolside/laguna-s-2.1:free` | 131 072 | **262 144** |
+| `kilo/cohere/north-mini-code:free` | 131 072 | **256 000** |
+
+**Every other context window in the pool is still a catalog estimate, not a measurement.** Those providers'
+`GET /v1/models` answers `403` without a credential, and OVH's endpoint — although it answers `200` — does
+not publish a context field at all. The `source` note on each entry in `lib/providers.js` says where its
+number came from and when; treat anything that does not say "measured" as an estimate. `llm7`'s two models
+are the only other measured rows (their endpoint publishes `context_window.tokens`).
+
+If a provider in your install reports a different window, override it per model — no code change needed:
+
+```yaml
+providers:
+  groq:
+    models:
+      - id: llama-3.3-70b-versatile
+        name: Llama 3.3 70B
+        capability: 4
+        speed: 5
+        contextWindow: 131072     # your number wins
+        toolCalling: true
+```
 
 ## Compatibility
 
