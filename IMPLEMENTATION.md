@@ -612,3 +612,94 @@ T11 的 harness 有三条"信息性探针"，修复后其中两条变成 `not re
 `i3-no-cooldown-after-429` 的注入锚点是 `lib/health.js` 里的一行字面量；我在重写 `recordFailure()` 时**特意保留了那一行的原文**，并把"凭据失效必然 park"的规则挪到 `&&` **之后**再做一次或运算（`const cools = shouldCool || invalid`），这样抑制策略永远不会让一个被拒的 key 留在轮换里。六个锚点现在都在源码里各出现一次。
 
 **第三条探针仍然显示 `REPRODUCED`，且这是正确的**：它的输入是**裸 `{status: 400}`（不带任何 code）**，而裸 400 是"请求格式错误"，本就不该 park；它的名称虽提到 `model_unavailable`，却没有构造那个条件。真正的 `model_unavailable` 修复在 dispatch 层（`cooldown: error.retryable`），由本插件自己的 e2e 测试钉住（400 与 404 两种拼写**都** park 并跳过下一次请求）。如果把裸 400 也改成默认 park，这条探针反而会抛错、harness 变红——那才是错的方向。
+
+### 12.14 T15：静默替换（严重）与"装死的列表"
+
+#### 12.14.1 缺陷 A：钉模型被静默替换
+
+零凭据实测（`_lead/pinned-probe.mjs`）：
+
+| 请求的 model | 修复前 | 修复后 |
+|---|---|---|
+| `llama-3.3-70b-versatile`（groq 的模型，无 key） | 由 `llm7/DeepSeek-V4-Flash-0731` 作答，**`finish: stop`** | `finish: error` / `MISSING_CREDENTIAL`，**上游 0 次请求** |
+| `totally-made-up-model-xyz`（不存在） | 由 `kilo/cohere/north-mini-code:free` 作答，**`finish: stop`** | `finish: error` / `UNKNOWN_MODEL`，**上游 0 次请求** |
+
+根因：`#streamDirect` 只把 `splitPoolModelId(options.model)` 当**过滤器**用，而它对不带 `/` 的 id 返回 `undefined` ⇒ 过滤器等于不存在 ⇒ 落回"池内自由选型"。用户点名的模型于是被当成 `auto` 处理。
+
+**严格模式**：`model` 既不是 `auto` 也不是 `auto:<tier>` 时就是**钉模型**，只允许匹配该模型的候选，绝不回退：
+
+1. 先按 `provider/model` 精确匹配（picker 播发的复合 id）；
+2. 再按**裸 model id** 精确匹配（`GET /v1/models` 与各家文档的写法，例如 `llama-3.3-70b-versatile`；也可能同时命中多家的同名模型——那仍是同一个模型，所以它们之间 failover 是诚实的）；
+3. 都不命中 ⇒ `UNKNOWN_MODEL`：message 给"最接近的 3 个 id"、提示"该 provider 默认关闭时怎么打开"，并建议改用 `auto`；
+4. 命中但该家**没有凭据** ⇒ `MISSING_CREDENTIAL`：message 点名**确切的 env 名**与**申请地址**，并说明"或在 DSH 设置页粘贴"；
+5. 命中但被**冷却 / 其它硬门槛**挡住 ⇒ `MODEL_UNAVAILABLE`：附上逐条排除原因，建议 `auto` 或稍后重试。
+
+`auto` / `auto:simple|medium|complex` 的行为**一字未改**（池内选型 + failover 照旧）。
+
+#### 12.14.2 缺陷 B：列表里 15/21 是装死的
+
+`listModels()` 原先不解析凭据（`stream()` 才在 dispatch 前 `isProviderUsable` 过滤），零凭据下 advertised 21 / 真正可连通 6，而用户截图里最前面的正是打不通的 Groq/Cerebras。
+
+**方案 C（用户拍板）**：`listModels()` 现在也解析凭据（每个 provider 一次，与 `stream()` 共用 `#resolveProviderKeys`）：
+
+| provider 状态 | 产出 |
+|---|---|
+| keyless，或解析到凭据 | 照常列出它的真实模型 |
+| `enabled` 但拿不到凭据 | **恰好 1 条**引导项 `setup:<provider>`，名字形如 `Groq ▸ needs GROQ_API_KEY (free key: console.groq.com/keys)`，`description` 同样带 env 名与申请地址 |
+| `enabled: false` | **什么都不产出**（zhipu / volcengine / longcat 不会混进来） |
+
+引导项的 id 约定是 **`setup:<providerId>`**（`catalog.js::setupModelId()` / `SETUP_MODEL_PREFIX`），已被测试固定。排序上**可服务的模型排在引导项之前**——起因就是"打不通的排在最前"，引导项绝不能把能用的模型挤下去。
+
+零凭据默认池现在是 **13 条**（4 条虚拟路由 + 6 条 kilo/llm7 真实模型 + 3 条引导项），**没有一条装死的模型行**。配好 key 后下一次 `listModels()` 会重新解析凭据 ⇒ 真实模型出现、引导项消失（有测试）。
+
+#### 12.14.3 这次为什么旧 mock 又没抓住
+
+上一轮把 mock 加固成"校验 `body.model`"，抓住的是**形状**问题（发出去的模型名对不对）；静默替换是**该不该发这个请求**的问题——mock 只看到"来了一个请求、模型名合法"就回 200，于是"本该被拒绝的请求被发到了别的 provider"完全不在它的观测范围内。
+
+新的直证断言把两件事绑在一起：**任何"应当被拒绝"的场景都必须同时满足 ①以 error 终结、②整个 mock 池收到 0 次请求**。第二条才是"没有偷偷打给别人"的证据——只看 ① 的话，一个"先偷偷打给别人、失败后再报错"的实现也会通过。`tests/pinning.test.mjs` 里 8 个拒绝场景全部带这一条（`totalRequests(pool) === 0`）。
+
+#### 12.14.4 需要 T14 补的文档
+
+- 模型列表新增 `setup:<provider>` 引导项：说清"它不是一个模型、选中它不会发起请求"，以及"配好 `apiKeyEnv` 后重开列表即可"。
+- 钉模型是**严格模式**：请求 `provider/model` 或裸 model id 时，插件只会用那个模型；没 key / 模型不存在 / 正在冷却都会**报错并给引导**，绝不替你换一家。想让它自由选型请用 `auto`。
+
+### 12.15 T17：key 申请地址的**单一来源**（N-2 同类：常量副本漂移）
+
+文档席位在 T16 收口时如实报出：三个引导项里 `cerebras` 那条**没有申请地址**，文案是 `Cerebras ▸ needs CEREBRAS_API_KEY (free key: configure it in DSH settings)`——而它正是默认启用集里的一家，且用户这次要的就是"引导去添加 API key"。
+
+**根因**：同一个事实存在两处。`lib/dispatch.js` 里有一张硬编码的 `KEY_ENTRY_POINTS`（含 `'Cerebras https://cloud.cerebras.ai/'`），`lib/catalog.js::setupHint()` 却读 `provider.keyURL`；`providers.js` 里 `cerebras.keyURL = null`，于是**一张表知道地址、另一张表是空的**。这与 T11 验证席位把 `CONSERVATIVE_CAPS` 副本列为 N-2 是同一类问题：两份会各自演化的数据。
+
+**收敛**（`providers.js` 现在是唯一权威）：
+
+| 位置 | 变化 |
+|---|---|
+| `providers.js::providerDeclarations(config)` | **新增**：把"有哪些 provider、各自声明什么"抽成一个函数——内置顺序 + 用户覆盖，`listProviderModels()` 与 `keyEntryPoints()` 共用它 |
+| `providers.js::keyEntryPoints(config)` | **新增**：enabled 且 `keyURL` 非空的 provider → `{id, displayName, apiKeyEnv, keyURL}` |
+| `providers.js::BUILTIN_PROVIDERS` | `cerebras.keyURL` 由 `null` 补为 `https://cloud.cerebras.ai/` |
+| `dispatch.js` | **删掉** `KEY_ENTRY_POINTS`，`NO_CANDIDATES` 的文案改为调用 `keyEntryPoints(config)` |
+
+`NO_CANDIDATES` 现在引用**用户自己池子里**能用的入口；如果用户把所有 provider 都关了（这是走到这条诊断最常见的原因），回落到出厂默认池的入口，所以文案不会因为没有 enabled 的家而变成空话。
+
+**为什么不给其余几家编 URL**：`github` / `zhipu` / `volcengine` / `longcat` / `nvidia` / `ovh` 在 `research/free-provider-catalog.md` 里**没有** key 申请地址的取证记录（各家的 `key 申请` 一栏要么缺失、要么写着"未列（不编造 URL）"）。它们默认关闭，编一个错的地址比留空更糟，因此保持 `null`，`setupHint()` 的措辞退化为 `(free key: configure it in DSH settings)`——依然可操作，且不出现 `null` 字样。
+
+`kilo` 也是 `null`：它**keyless**，永远可用，因此**永远不会**产出引导项，不需要 key 地址；`llm7` 同为 keyless 但保留它的 token 页（用户想提高额度时用得上）。因此不变式写成**"enabled 且非 keyless ⇒ 必须有 keyURL"**，而不是"enabled ⇒ 必须有"。
+
+**反漂移断言**（`tests/pinning.test.mjs`）：
+
+1. **源码级**：`lib/dispatch.js` 里**不允许出现任何 `http(s)://` 字面量**——地址再想回来就得先过这条测试；
+2. **数据级**：每个 enabled 且非 keyless 的 provider 必须有 keyURL，且必须是 `https://`；
+3. **文案级**：`NO_CANDIDATES` 的 message 必须逐一包含 `keyEntryPoints()` 里前 5 条的 URL，且必须含 `cloud.cerebras.ai`（就是这次回归的那一条）；
+4. **覆盖级**：用户改了 `providers.groq.keyURL` 时，文案引用的是**用户的值**而不是内置值；
+5. **措辞级**：遍历所有 provider 的 `setupHint()`，断言不含 `null` / `undefined` 且都带 `needs <ENV>`。
+
+补后的全表（enabled 且 needs-key 的家**全部**有地址）：
+
+```text
+ON  groq         needs-key  https://console.groq.com/keys
+ON  cerebras     needs-key  https://cloud.cerebras.ai/          ← 本次补齐
+ON  openrouter   needs-key  https://openrouter.ai/keys
+off mistral      needs-key  https://console.mistral.ai/api-keys
+ON  llm7         keyless    https://token.llm7.io/
+ON  kilo         keyless    (null)   ← keyless，永不产出引导项
+off github / zhipu / volcengine / longcat / nvidia / ovh   (null)   ← 无取证，不编造
+```

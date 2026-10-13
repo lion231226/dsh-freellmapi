@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.3.0] - 2026-10-13
+
+**A pinned model is now honoured or refused — never quietly replaced.**
+
+### Changed
+
+- **⚠️ Behaviour change: requesting a concrete model id is now a strict pin.** In v0.2.0 a pinned model
+  could be *silently substituted*: with no credential configured, picking `Llama 3.3 70B · Groq` was
+  answered by a different provider's model and reported as a successful turn, and a completely invented id
+  (`totally-made-up-model-xyz`) was answered as well. The user could not tell. From v0.3.0, `auto` and
+  `auto:simple|medium|complex` still select freely inside the pool, but any other id (the composite
+  `provider/model` or a bare model id) is served **only** by that model — a pin that cannot be served fails
+  with an explicit error and **zero upstream requests**.
+- **The model list now shows only what can answer.** A provider that is enabled but has no usable
+  credential contributes **one `setup:<provider>` guidance entry** instead of its unreachable model rows,
+  and servable models are sorted ahead of the guidance. In the zero-credential default install the picker
+  went from 21 advertised entries (15 of them unreachable, and sitting at the top) to 13 — 4 virtual
+  routes, 6 keyless models, 3 guidance entries.
+
+### Fixed
+
+- **Silent substitution of pinned models** (the "answers with somebody else and calls it a success" defect
+  above). The root cause was that a model id without a `/` was treated as a failed filter and fell back to
+  free selection inside the pool.
+- Listing models that could never be served: `listModels()` did not resolve credentials, so every enabled
+  provider looked usable.
+
+### Added
+
+- **`setup:<provider>` guidance entries** whose names carry the exact environment variable and where to
+  get a free key, e.g.
+  `Groq ▸ needs GROQ_API_KEY (free key: console.groq.com/keys)`. They are signposts, not models: selecting
+  one issues no request, and after the credential is set the provider's real models appear and the entry
+  disappears.
+- **`UNKNOWN_MODEL` and `MODEL_UNAVAILABLE` failure codes** with actionable messages: the closest model ids
+  plus a "enable that provider" hint, or the per-candidate exclusion reasons (cooldown, vision, tools,
+  context window) plus a "use `auto`, or retry after the cooldown" hint. `MISSING_CREDENTIAL` for a pinned
+  model now names the exact variable, the free-key page, the DSH settings page, and `auto` as the
+  alternative.
+- Pins resolve against both spellings: the composite `provider/model` from the picker and the bare model
+  id used by `GET /v1/models` and provider documentation.
+
 ## [0.2.0] - 2026-10-13
 
 **The plugin became self-contained.** v0.1.0 forwarded everything to an external freellmapi gateway;
@@ -173,6 +215,7 @@ fixed in 0.1.0.
   the plugin refuse to load with a message naming the conflict; remove one of the two.
 - MIT licensed.
 
-[Unreleased]: https://github.com/lion231226/dsh-freellmapi/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/lion231226/dsh-freellmapi/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/lion231226/dsh-freellmapi/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lion231226/dsh-freellmapi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lion231226/dsh-freellmapi/releases/tag/v0.1.0

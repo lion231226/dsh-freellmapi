@@ -26,6 +26,8 @@
 - [你会得到什么](#你会得到什么)
 - [零配置：一个 key 都不配时能用什么](#零配置一个-key-都不配时能用什么)
 - [添加 key](#添加-key)
+- [模型列表怎么读](#模型列表怎么读)
+- [钉模型是严格模式](#钉模型是严格模式)
 - [它怎么选模型](#它怎么选模型)
 - [故障转移与健康度](#故障转移与健康度)
 - [两种模式：`direct` 与 `gateway`](#两种模式direct-与-gateway)
@@ -45,7 +47,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.2.0   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.3.0   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -87,6 +89,7 @@
 | **健康度与冷却** | **首次可重试失败就已经停车**（2 分钟），之后每次连续失败升一级：2 分钟 → 10 分钟 → 1 小时 → 24 小时。provider 给的 `Retry-After` 永远优先；凭据被拒（401/403）则该家停车 24 小时。降权会按 60 秒半衰期衰减，所以一次 429 绝不会变成"无期徒刑"。 |
 | **零配置即可起步** | Kilo 与 LLM7 不需要任何凭据就能答；全新安装在你配任何东西之前就已经有非空候选池。 |
 | **诚实的诊断信息** | 每个请求一行日志，写明档位、胜出者与试了几家；所有失败都是带内 `finish` chunk 加稳定错误码，绝不抛异常。 |
+| **绝不静默替换** | 选中具体模型 id 就是**严格钉模型**：没凭据、不存在、正在冷却，都会得到带指引的明确报错，而不是别人家的答案。模型列表只展示真的能服务的东西，每个没配凭据的家折叠成一条 `setup:<provider>` 路牌。 |
 | **`gateway` 模式原样保留** | v0.1.0 的行为——转发给外部 [freellmapi](https://github.com/tashfeenahmed/freellmapi) 网关——仍在 `mode: gateway` 后面，一字未改，给想要网关自己的 bandit 打分、缓存与 `fusion` 的人。 |
 
 ## 零配置：一个 key 都不配时能用什么
@@ -173,6 +176,60 @@ providers:
         toolCalling: true
 ```
 
+## 模型列表怎么读
+
+选择器里的条目分三组，顺序如下：
+
+1. **虚拟路由** —— `auto`、`auto:simple`、`auto:medium`、`auto:complex`，永远存在；
+2. **真的能服务的模型** —— 免凭据的家，以及凭据已解析到的家；
+3. **每个"已启用但拿不到凭据"的家，折叠成 1 条 `setup:<provider>` 引导项。** 它代替那家的模型行，
+   因为那些行选中了也只会得到 `MISSING_CREDENTIAL`。
+
+被**关闭**的家（`enabled: false`，十二家里默认就有七家）什么都不产出，它们的模型根本不会出现。
+
+`setup:` **不是模型**：选中它不会发起任何请求，它只是一块路牌，名字里带着确切的环境变量名和免费
+申请地址：
+
+```text
+setup:groq        Groq ▸ needs GROQ_API_KEY (free key: console.groq.com/keys)
+setup:cerebras    Cerebras ▸ needs CEREBRAS_API_KEY (free key: cloud.cerebras.ai)
+setup:openrouter  OpenRouter ▸ needs OPENROUTER_API_KEY (free key: openrouter.ai/keys)
+```
+
+| 你配了什么 | 选择器里显示什么 |
+|---|---|
+| **什么都没配**（零凭据） | **13 条**：4 条虚拟路由 → 两家免凭据家的 6 个真实模型（`llm7/codestral-latest`、`llm7/DeepSeek-V4-Flash-0731`、4 个 `kilo/…:free`）→ 3 条引导项（`setup:groq`、`setup:cerebras`、`setup:openrouter`）。**没有一条是打不通的。** |
+| **配了 `GROQ_API_KEY`** | **15 条**：形状相同，但 groq 的三个真实模型出现（按池子自身顺序，因此排在具体模型的最前）且 `setup:groq` 消失；`setup:cerebras`、`setup:openrouter` 仍在。 |
+
+列表在每次 `listModels()` 调用时重建，所以配好 key 之后你只需要**重新打开选择器**：真实模型出现、
+那家的引导项消失。不用重启，也不用改配置。
+
+为什么要折叠：v0.2.0 的零凭据安装里，选择器播发 21 条，真正能答的只有 6 条——而打不通的 Groq/Cerebras
+恰好排在最前面。那看起来就是一个坏掉的选择器。现在**能用的模型永远排在引导项之前**。
+
+## 钉模型是严格模式
+
+`auto` 与 `auto:simple|medium|complex` 是让插件**替你选**。任何其它模型 id——选择器里的复合
+`provider/model`，或像 `llama-3.3-70b-versatile` 这样的裸 id——都是**钉模型**：你点名要那一个，插件
+绝不会拿另一个来答。
+
+严格正是重点。到 v0.2.0 为止，钉住的模型会被**静默替换**：没配 key 时选 `Llama 3.3 70B · Groq`，
+会由另一家的模型作答、并且以成功收尾；连 `totally-made-up-model-xyz` 这种根本不存在的 id 也照答不误。
+对话记录里没有任何地方说明这件事。v0.3.0 起，钉住的模型若无法服务，会在**联系任何 provider 之前**
+明确失败：
+
+| 场景 | 错误码 | message 里会告诉你什么 |
+|---|---|---|
+| 服务该模型的那家没有凭据 | `MISSING_CREDENTIAL` | 缺的确是哪个环境变量、去哪免费申请、也可以直接在 DSH 设置页粘贴，以及现在就能用的 `auto` |
+| 池子里没有任何一家提供该 id | `UNKNOWN_MODEL` | 池里最接近的三个 id、你用的 provider 前缀是否只是被默认关闭、以及改用 `auto` 的建议 |
+| 模型存在，但服务它的候选全被门槛挡掉（冷却、视觉、工具、上下文窗口） | `MODEL_UNAVAILABLE` | 逐条排除原因，以及改用 `auto` 或等冷却结束的建议 |
+
+三种结局都以带内 `finish` 错误 chunk 收尾，并且**上游请求数为 0**——最后这半句正是测试断言的东西，
+因为"偷偷问了别人、失败了再报错"是同一个 bug 换顶帽子。
+
+**`auto` 与三档覆盖完全不受影响**：它们本来就是在池内自由选型、在候选之间故障转移的。想让插件自己
+决定，就用 `auto`。
+
 ## 它怎么选模型
 
 每个请求都由一个**纯粹、确定性**的分类器（`lib/complexity.js`）打分：不读时钟、不掷随机数、不联网、
@@ -248,6 +305,9 @@ score = 1 − Π (1 − wᵢ · sᵢ)  −  simplePenalty
 | `auto:simple` | 强制快车道 |
 | `auto:medium` | 强制均衡档 |
 | `auto:complex` | 强制最强档 |
+
+任何**其它** id——`llm7/codestral-latest`，或裸的 `llama-3.3-70b-versatile`——都是严格钉模型而不是
+档位：见[钉模型是严格模式](#钉模型是严格模式)。
 
 强制档位时分类器**照跑**——分数与理由都会记录，日志行会注明 `(forced by the selected model id)`——
 只是档位不再由它决定。
@@ -446,8 +506,9 @@ dsh-freellmapi: routed via groq/llama-3.3-70b (model=auto) fallback-attempts=2 t
 **只配一家：** 能用，分类器照跑——但只有一家的模型时，排序退化成了"在这家里挑最适合本档位的模型"。
 **至少两家**才有东西可"路由"。
 
-**不会发生的事：** 缺 key 永远不是错误。没有可用凭据的 provider 会被静默移出候选池——没有警告、没有
-"配置不完整"的提示。这是刻意的：在什么都没配的机器上，免凭据池必须还能工作。
+**不会发生的事：** 缺 key 永远不是错误。没有可用凭据的 provider 会被静默移出**路由候选**——没有警告、
+没有"配置不完整"的提示；而在模型列表里，它会以一条 `setup:<provider>` 路牌出现，而不是一排打不通的
+模型行（见[模型列表怎么读](#模型列表怎么读)）。这是刻意的：在什么都没配的机器上，免凭据池必须还能工作。
 
 ## 架构
 
@@ -467,7 +528,7 @@ dsh-freellmapi: routed via groq/llama-3.3-70b (model=auto) fallback-attempts=2 t
 │       │    auto:simple     → 强制快车道                                                  │
 │       │    auto:medium     → 强制均衡档                                                  │
 │       │    auto:complex    → 强制最强档                                                  │
-│       │    provider/model  → 钉死一个候选                                                │
+│       │    provider/model  → 钉死一个候选（严格：不替换）                                │
 │       ▼                                                                                  │
 │  scoreComplexity()  →  simple / medium / complex  +  分数  +  理由                       │
 │       │                                                                                  │
@@ -533,15 +594,15 @@ dsh-freellmapi: all 3 candidate(s) failed for tier=medium after 2 attempts — g
 被硬门槛挡掉（视觉 / 工具 / 上下文 / 冷却）。它的 message 里会列出申请 key 的入口。
 `STREAM_INTERRUPTED` 表示输出已经发出去了，按设计不再换家。
 
-### 4. 模型列表里只有 `auto` 和几个档位
+### 4. 模型列表里只有 `auto`、几个档位和一些 `setup:` 条目
 
-那是目录里的静态部分。`provider/model` 条目来自池子，对**已启用**的家总会列出——哪怕你没有它的 key。
-如果钉死某个 `provider/model` 后返回 `NO_CANDIDATES`，说明那家的凭据没解析到；这种沉默是刻意的
-（见[只配一家？](#只配一家一家都不配)）。
+这正是零凭据下的预期形状：虚拟路由 + 真正可达的东西。出现 `setup:<provider>` 表示那一家已启用但拿不到
+可用凭据——按它名字里的环境变量配好，再重新打开选择器即可。见
+[模型列表怎么读](#模型列表怎么读)。
 
 ### 5. 我配好的某家被跳过了
 
-缺 key ⇒ 静默移出候选池，没有警告。另外检查：
+缺 key ⇒ 静默移出路由候选，没有警告（列表里它会显示成 `setup:<provider>` 路牌）。另外检查：
 
 - `enabled`——有七家是**默认关闭**的（`github`、`mistral`、`zhipu`、`volcengine`、`longcat`、
   `nvidia`、`ovh`），要在 `providers.<id>.enabled` 里打开。
@@ -577,6 +638,25 @@ Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
 那是聚合器的目录漂移（LLM7 会轮换模型），不是安装坏了。它与 `404 model_not_found` 同义：这个
 `(provider, model)` 组合会被**停车**（从 2 分钟那一档开始），接着由下一名候选服务本次请求。如果某个
 模型持续如此，把它从该家的 `models` 列表里删掉，或 `providers.<id>.enabled: false`。
+
+### 8. 我选了具体模型，却报 `MISSING_CREDENTIAL`
+
+**这是有意行为**——就是[钉模型是严格模式](#钉模型是严格模式)里说的严格钉模型。具体模型 id 要的是
+**那一个**模型，所以当它的 provider 没有凭据时，插件宁可直接拒绝，也不会偷偷换一家来答。message 里会
+点名确切的环境变量与免费申请地址。两条出路：
+
+- 配好那个变量（或在 DSH 设置页粘贴 key），再发一次；或者
+- 选 `auto`，它会用现在就不需要任何 key 的那些家。
+
+### 9. `UNKNOWN_MODEL`
+
+你要的 id 池子里没有任何一家提供。message 会列出最接近的三个 id，并告诉你所用的 provider 前缀是否只是
+被默认关闭了。常见原因：拼错；从某家自己的文档里抄来的、并不在本池里的 id；或者该家默认关闭
+（`github`、`mistral`、`zhipu`、`volcengine`、`longcat`、`nvidia`、`ovh`）——先在
+`config.providers.<id>` 里打开它。如果你只是想要一个答案，用 `auto`。
+
+钉住的模型存在、只是正在冷却时报的是 `MODEL_UNAVAILABLE`，并附上每个候选的排除原因；用 `auto` 或等
+冷却结束都可以。
 
 ## 限制与未验证项
 
@@ -625,7 +705,7 @@ Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.2.0` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；唯一 peer 是可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.3.0` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；唯一 peer 是可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立

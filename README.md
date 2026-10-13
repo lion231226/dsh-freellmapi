@@ -27,6 +27,8 @@ contains keyless providers that the maintainer verified with real, credential-fr
 - [What you get](#what-you-get)
 - [Zero config: what works with no key at all](#zero-config-what-works-with-no-key-at-all)
 - [Adding keys](#adding-keys)
+- [How to read the model list](#how-to-read-the-model-list)
+- [Pinned models are strict](#pinned-models-are-strict)
 - [How it picks a model](#how-it-picks-a-model)
 - [Failover and health](#failover-and-health)
 - [Two modes: `direct` and `gateway`](#two-modes-direct-and-gateway)
@@ -47,7 +49,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.2.0   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.3.0   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -90,6 +92,7 @@ so a correctly installed bundle needs no hand-written patch row. **Never add a s
 | **Health tracking and cooldowns** | The **first retryable failure already parks** the candidate (2 minutes), and each further consecutive failure escalates one step: 2 m → 10 m → 1 h → 24 h. `Retry-After` from the provider always wins; a rejected credential (401/403) parks that provider for 24 h. The scoring penalty decays with a 60-second half-life, so a single 429 is never a life sentence. |
 | **Zero-config start** | Kilo and LLM7 answer without any credential; a fresh install has a non-empty candidate pool before you configure anything. |
 | **Honest diagnostics** | One log line per request names the tier, the winner and how many candidates were tried; every failure is an in-band `finish` chunk with a stable code, never an exception. |
+| **No silent substitutions** | Picking a concrete model id is a **strict pin**: if it has no credential, does not exist, or is cooling down, you get an explicit error with instructions instead of somebody else's answer. The model list shows only what can actually serve, plus one `setup:<provider>` signpost per unkeyed provider. |
 | **`gateway` mode kept intact** | The v0.1.0 behaviour — forwarding to an external [freellmapi](https://github.com/tashfeenahmed/freellmapi) gateway — is still there behind `mode: gateway`, unchanged, for people who want the gateway's own bandit scoring, caching and `fusion`. |
 
 ## Zero config: what works with no key at all
@@ -178,6 +181,67 @@ providers:
         toolCalling: true
 ```
 
+## How to read the model list
+
+The picker is built from three groups, in this order:
+
+1. **The virtual routes** — `auto`, `auto:simple`, `auto:medium`, `auto:complex`. These always exist.
+2. **Every model whose provider can actually serve it** — keyless providers, plus providers whose
+   credential resolved.
+3. **One `setup:<provider>` guidance entry per enabled provider that has no usable credential.**
+   It replaces that provider's model rows, because those rows would only end in
+   `MISSING_CREDENTIAL` if you picked one.
+
+A provider that is **disabled** (`enabled: false`, which includes seven of the twelve by default)
+contributes nothing at all, so its models never appear.
+
+`setup:` entries are **not models**. Selecting one sends no request — it is a signpost whose name carries
+the exact environment variable and where to get a free key:
+
+```text
+setup:groq        Groq ▸ needs GROQ_API_KEY (free key: console.groq.com/keys)
+setup:cerebras    Cerebras ▸ needs CEREBRAS_API_KEY (free key: cloud.cerebras.ai)
+setup:openrouter  OpenRouter ▸ needs OPENROUTER_API_KEY (free key: openrouter.ai/keys)
+```
+
+| What you configured | What the picker shows |
+|---|---|
+| **Nothing** (zero credentials) | **13 entries**: the 4 virtual routes, then the 6 models of the two keyless providers (`llm7/codestral-latest`, `llm7/DeepSeek-V4-Flash-0731`, four `kilo/…:free`), then 3 guidance entries (`setup:groq`, `setup:cerebras`, `setup:openrouter`). Nothing that cannot answer. |
+| **`GROQ_API_KEY` set** | **15 entries**: the same shape, but `groq`'s three real models appear (in the pool's own order, so they lead the concrete rows) and `setup:groq` is gone. `setup:cerebras` and `setup:openrouter` remain. |
+
+The list is rebuilt on every `listModels()` call, so after you set a key you only need to **reopen the
+picker** — the real models appear and that provider's guidance entry disappears. No restart, no config
+edit.
+
+The reason for the fold: in the zero-credential install of v0.2.0 the picker advertised 21 entries, of
+which only 6 could answer — and the unreachable Groq/Cerebras rows happened to sit at the very top. That
+is a picker that looks broken. Working models are now sorted ahead of the guidance, always.
+
+## Pinned models are strict
+
+`auto` and `auto:simple|medium|complex` ask the plugin to **choose**. Any other model id — the composite
+`provider/model` from the picker, or a bare id such as `llama-3.3-70b-versatile` — is a **pin**: it asks
+for that one model, and the plugin will never answer with a different one.
+
+That strictness is the point. Up to v0.2.0 a pinned model could be **silently substituted**: with no key
+configured, picking `Llama 3.3 70B · Groq` was answered by a different provider's model and reported as a
+successful turn, and a completely invented id (`totally-made-up-model-xyz`) was answered too. Nothing in
+the transcript said so. Since v0.3.0 a pin that cannot be served fails loudly, before any provider is
+contacted:
+
+| Situation | Failure code | What the message tells you |
+|---|---|---|
+| The provider serving that model has no credential | `MISSING_CREDENTIAL` | Which exact environment variable is missing, where to get a free key, that you can paste it in the DSH settings page instead, and that `auto` works right now |
+| No provider in the pool serves that id | `UNKNOWN_MODEL` | The three closest model ids in the pool, whether the provider prefix you used is merely disabled, and a suggestion to use `auto` |
+| It exists, but every provider serving it is gated out (cooldown, vision, tools, context window) | `MODEL_UNAVAILABLE` | The per-candidate exclusion reasons, and a suggestion to use `auto` or retry after the cooldown |
+
+All three end the stream as an in-band `finish` error chunk with **zero upstream requests** — that last
+part is what the tests assert, because "reports an error after quietly asking somebody else" would be the
+same bug wearing a hat.
+
+**`auto` and the tier overrides are unaffected.** They deliberately select freely inside the pool and fail
+over between candidates; that is what they are for. If you want the plugin to decide, use `auto`.
+
 ## How it picks a model
 
 Every request is scored by a **pure, deterministic classifier** (`lib/complexity.js`): no clock, no
@@ -254,6 +318,9 @@ So when *you* know better than the classifier, say so — the model id **is** th
 | `auto:simple` | Force the fast lane |
 | `auto:medium` | Force the balanced lane |
 | `auto:complex` | Force the strongest lane |
+
+Any **other** id — `llm7/codestral-latest`, or a bare `llama-3.3-70b-versatile` — is a strict pin rather
+than a lane: see [Pinned models are strict](#pinned-models-are-strict).
 
 The classifier still runs for the forced tiers — the score and the reasons are recorded, and the log line
 says `(forced by the selected model id)` — but the tier no longer decides.
@@ -476,8 +543,10 @@ models the ranking degenerates into "pick the best model that provider has for t
 least two** providers before routing has anything to route *between*.
 
 **What does *not* happen:** a missing key is never an error. Providers without a usable credential are
-dropped from the candidate pool silently — no warning, no "configuration incomplete" banner. That is
-deliberate: a keyless pool must keep working on a machine where nothing is configured.
+dropped from the routing candidates silently — no warning, no "configuration incomplete" banner — and in
+the model list they appear as a single `setup:<provider>` signpost instead of rows that cannot answer
+(see [How to read the model list](#how-to-read-the-model-list)). That is deliberate: a keyless pool must
+keep working on a machine where nothing is configured.
 
 ## Architecture
 
@@ -497,7 +566,7 @@ deliberate: a keyless pool must keep working on a machine where nothing is confi
 │       │    auto:simple     → force the fast lane                                         │
 │       │    auto:medium     → force the balanced lane                                     │
 │       │    auto:complex    → force the strongest lane                                    │
-│       │    provider/model  → pin exactly one candidate                                   │
+│       │    provider/model  → pin exactly one candidate (strict: no substitution)         │
 │       ▼                                                                                  │
 │  scoreComplexity()  →  simple / medium / complex  +  score  +  reasons                   │
 │       │                                                                                  │
@@ -569,16 +638,17 @@ keyless provider enabled, or every candidate failed a hard gate (vision / tools 
 cooldown). Its message lists key-application entry points. `STREAM_INTERRUPTED` means output had already
 been delivered, so by design there was no failover.
 
-### 4. The model list only shows `auto` and the tier routes
+### 4. The model list only shows `auto`, the tier routes and some `setup:` entries
 
-That is the static part of the catalog. The `provider/model` entries come from the pool and are always
-listed for **enabled** providers — even ones you have no key for. If a pinned `provider/model` then
-returns `NO_CANDIDATES`, that provider's credential was not resolvable; the silence is by design
-(see [Just one key?](#just-one-key-no-keys)).
+That is the intended zero-credential shape: the virtual routes plus whatever is genuinely reachable. A
+`setup:<provider>` entry means that provider is enabled but has no usable credential — set the environment
+variable in its name and reopen the picker. See
+[How to read the model list](#how-to-read-the-model-list).
 
 ### 5. A provider I configured is being skipped
 
-Missing key ⇒ silently dropped from the candidate pool, no warning. Also check:
+Missing key ⇒ silently dropped from the routing candidates, no warning (the picker shows it as a
+`setup:<provider>` signpost instead). Also check:
 
 - `enabled` — seven providers ship **disabled** (`github`, `mistral`, `zhipu`, `volcengine`, `longcat`,
   `nvidia`, `ovh`); turn them on in `providers.<id>.enabled`.
@@ -619,6 +689,27 @@ That is catalog drift on an aggregator (LLM7 rotates models), not a broken insta
 meaning as a `404 model_not_found`: the `(provider, model)` pair is **parked** (starting at the 2-minute
 cooldown step) and the next candidate serves the request. If it happens constantly for one model, remove it
 from that provider's `models` list or set `providers.<id>.enabled: false`.
+
+### 8. I picked a specific model and got `MISSING_CREDENTIAL`
+
+**That is intentional** — it is the strict-pinning behaviour described in
+[Pinned models are strict](#pinned-models-are-strict). A concrete model id asks for *that* model, and if
+its provider has no credential the plugin refuses rather than quietly answering with another provider's
+model. The message names the exact environment variable and where to get a free key. Two ways forward:
+
+- set that variable (or paste the key in the DSH settings page), then send the request again; or
+- select `auto`, which uses the providers that need no key at all right now.
+
+### 9. `UNKNOWN_MODEL`
+
+The id you asked for is not served by any provider in the pool. The message lists the three closest ids
+and tells you when the provider prefix you used is merely disabled. Common causes: a typo, an id copied
+from a provider's own docs that is not in this pool, or a model of a provider that ships disabled
+(`github`, `mistral`, `zhipu`, `volcengine`, `longcat`, `nvidia`, `ovh`) — enable it under
+`config.providers.<id>` first. Use `auto` if you just want an answer.
+
+A pinned model that exists but is cooling down reports `MODEL_UNAVAILABLE` instead, with the exclusion
+reason for each candidate; `auto` or waiting out the cooldown both work.
 
 ## Limitations and unverified claims
 
@@ -678,7 +769,7 @@ Stated plainly, so you know what you are relying on:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.2.0` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; only peer is the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.3.0` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; only peer is the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package
