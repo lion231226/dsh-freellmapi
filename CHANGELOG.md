@@ -9,6 +9,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.2.0] - 2026-10-13
+
+**The plugin became self-contained.** v0.1.0 forwarded everything to an external freellmapi gateway;
+v0.2.0 ships its own free-provider pool and its own routing engine, so installing the plugin is the
+whole setup. `gateway` mode is still there, unchanged, behind a config field.
+
+### Added
+
+- **`direct` mode — built-in routing, no external process.** `lib/providers.js`, `lib/router.js`,
+  `lib/health.js` and `lib/dispatch.js`: a per-request complexity classifier, capability/speed ranking
+  with hard gates, health tracking, and failover across providers.
+- **Built-in free-provider pool: 12 providers / 30 models** — Groq, Cerebras, OpenRouter, GitHub
+  Models, Mistral, Z.ai (Zhipu), Volcengine Ark, LongCat, LLM7, Kilo, NVIDIA NIM and OVH AI Endpoints,
+  each model carrying capability (1–5), speed (1–5), context window, `vision` and `toolCalling`.
+  Five providers are enabled by default.
+- **Zero-config start.** Kilo and LLM7 answer with **no credential at all** — verified by real requests
+  sent without any `Authorization` header. A fresh install has a non-empty candidate pool before
+  anything is configured.
+- **Per-request complexity routing.** A pure, deterministic classifier scores seven signals (estimated
+  tokens, tool schemas, complexity vocabulary, reasoning burden, fenced code, conversation depth, image
+  input) with a noisy-OR combination, a simple-task penalty, and a hard `medium` floor for images; the
+  resulting `simple` / `medium` / `complex` tier sets the capability-vs-speed weights (0.25/0.75,
+  0.50/0.50, 0.80/0.20).
+- **Tier overrides in the model picker:** `auto:simple`, `auto:medium`, `auto:complex` force a lane
+  while still recording the classifier's score, and pinning a `provider/model` id pins that candidate.
+- **Automatic failover with one hard invariant: it only happens before the first chunk reaches DSH.**
+  `429`, `5xx`, timeouts, `404 model_not_found` and `400 model_unavailable` park the failed pair and move to
+  the next-ranked candidate; `401`/`403` and other `400`s do not. A mid-stream failure ends the stream
+  instead of splicing two models into one answer.
+- **Health tracking and cooldowns.** The **first retryable failure already parks** a candidate (2 minutes),
+  and each further consecutive failure escalates one step up the `2 m → 10 m → 1 h → 24 h` ladder; a
+  provider's `Retry-After` wins over the ladder; a rejected credential parks that provider for 24 h.
+  Failures also lower a candidate's score (`1 / (1 + 0.15 · effectiveFailures)`, floor 0.4), and that
+  penalty decays with a **60-second half-life** so a single 429 can never starve a candidate permanently.
+- **Latency participates only as real evidence.** The factor is `fastest / latency` clamped to `[0.85, 1]`
+  against the fastest candidate of the same request; **an unmeasured candidate no longer scores a perfect
+  1.0** (it is treated as "no faster than the slowest factor measured in this request"), and a
+  **100 ms noise floor** discards the whole signal when the measured spread is smaller than that, so
+  warm-up jitter cannot change the selection.
+- **Per-provider configuration** through `config.providers`: `enabled`, `displayName`, `baseURL`,
+  `apiKeyEnv`, `apiKey`, `keyless` and `models` (which replaces a provider's model list wholesale, so a
+  drifted catalog can be corrected without a release). Providers that are not in the built-in pool can
+  be added the same way.
+- **Routing-engine knobs** through `config.routing`: `maxAttempts` (6), `budgetMs` (45 000),
+  `thresholds`, `weights` and `preferredOrder`.
+- **Direct-mode routing log line** (`logRouting`, default on):
+  `dsh-freellmapi: tier=complex -> provider/model (capability=5, speed=3, 2 candidates tried)`.
+- **Bounded attempt budget** and new in-band failure codes: `NO_CANDIDATES`,
+  `ALL_CANDIDATES_FAILED`, `STREAM_INTERRUPTED`, `MODEL_UNAVAILABLE` (the deliberate exception to
+  "400 is not retryable", because aggregators rotate their catalogs).
+
+### Changed
+
+- **`mode` now defaults to `direct`, and that is a behaviour change.** An install that used to forward
+  every request to `http://localhost:3001` now routes across the built-in pool instead. Set
+  `mode: gateway` (plus `baseURL` and a `freellmapi-…` key) to get the v0.1.0 behaviour back.
+- The model picker in `direct` mode lists `auto`, the three tier overrides and every enabled
+  `provider/model`, instead of the gateway's virtual routes and discovered catalog.
+- `resolveModel()` in `direct` mode takes the context window, output cap and modalities of the pinned
+  pool entry, so DSH's compaction budget matches the model that will actually answer.
+- A missing provider credential is now a **silent, supported state** rather than an error path:
+  unconfigured providers are dropped from the candidate pool without warnings.
+
+### Fixed
+
+- `model_unavailable` (HTTP 400) is recognised as a per-`(provider, model)` condition and triggers
+  failover, instead of being classified as a permanently bad request. Other `400`s keep their
+  non-retryable classification.
+- The latency penalty can no longer flip a tier decision: its floor was raised from 0.5 to 0.85 after a
+  forced `auto:simple` request was observed changing to a strong-but-slow model.
+- Catalog corrections from the live keyless probe: removed `kilo`'s non-existent
+  `poolside/laguna-m.1:free` (404) and two `llm7` ids that answered `400 model_unavailable` (one of
+  which was also mislabelled `vision: true`); added `llm7`'s verified `DeepSeek-V4-Flash-0731` and
+  three free `kilo` models.
+
+### Known limitations
+
+- No end-to-end run against real keyed providers; rate-limit numbers are the upstream 2026-04 baseline.
+- The complexity classifier is a heuristic and demonstrably misjudges (see the README's worked
+  counter-examples); pin a tier or a model when you know better.
+- `zhipu`'s `baseURL` is the riskiest entry in the pool, and `volcengine` / `longcat` model ids are
+  inferred; all three ship disabled with `confidence: 'speculative'`.
+- Free catalogs drift (`model_unavailable` is normal weather, not a bug).
+- `nvidia` declares `parallel_tool_calls: false` but the declaration never reaches the wire; NVIDIA is
+  disabled by default.
+- Health state is not persisted across restarts, and a failed-over answer comes from a different model
+  than the top-ranked one.
+- Still open from the v0.1.0 verification round: `maxTokens` above `Number.MAX_SAFE_INTEGER`,
+  plain-string `user` content, `includeFusion: false` being undone by the gateway's own `fusion` entry
+  (gateway mode), and duplicate ids from `discover()`.
+
 ## [0.1.0] - 2026-10-13
 
 First public release.
@@ -82,5 +173,6 @@ fixed in 0.1.0.
   the plugin refuse to load with a message naming the conflict; remove one of the two.
 - MIT licensed.
 
-[Unreleased]: https://github.com/lion231226/dsh-freellmapi/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/lion231226/dsh-freellmapi/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/lion231226/dsh-freellmapi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lion231226/dsh-freellmapi/releases/tag/v0.1.0

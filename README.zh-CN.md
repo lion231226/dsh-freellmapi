@@ -1,801 +1,668 @@
 # dsh-freellmapi
 
-**把 [freellmapi](https://github.com/tashfeenahmed/freellmapi) 的 Auto 智能路由接进
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)。**
-
-`dsh-freellmapi` 是一个 DSH 的 LLM 适配器插件：它把本机的 freellmapi 网关注册成 DSH 的
-provider 路由 `freellmapi`，把路由器提供的 `auto` / `auto:<策略>` 模型摆进 DSH 的模型选择器，
-回报每一次请求**究竟是哪家上游在服务你**，并让模型列表跟着运行中的路由器实时更新。
+**给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 做免费额度多 provider 智能路由。**
+十几家免费池藏在一条 DSH provider 路由背后，按每次请求的复杂度自动选型，按能力/速度排序，
+429/5xx 自动故障转移。
 
 ```text
-DSH  ──▶  provider "freellmapi"  ──▶  POST http://localhost:3001/v1/chat/completions
-                                        { "model": "auto", "stream": true }
-                                      ──▶  freellmapi 路由器  ──▶  ~34 家 provider
+装插件  →  启动 DSH  →  模型选 provider "freellmapi" + model "auto"  →  它就能答
 ```
+
+不需要外部进程，不需要自己跑网关，也不需要一上来就配 key——内置池里有**免凭据**的 provider，
+维护者已用不带任何 Authorization 头的真实请求验证过。
 
 > ### 非官方插件，请先读这一段
 >
-> 这是一个社区作品。它与 freellmapi 项目、与 DeepSeek 官方**均无隶属关系**，未获其背书、
-> 赞助或支持；它既不是 freellmapi 的官方客户端，也不是 DSH 的官方插件。
-> "freellmapi" 与 "DeepSeek Harness" 的权利归各自所有者。本项目采用
-> [MIT 许可证](LICENSE)。
-
-> ### 你真的需要这个插件吗？
->
-> **如果只是想用上 Auto 模式，多半不需要。**
-> freellmapi 官方自带零插件的 DSH 接入方式：
->
-> ```bash
-> npx freellmapi setup-dsh --url http://localhost:3001 --api-key <unified-key>
-> ```
->
-> 它把网关写成 `$DSH_HOME/settings.yaml` 里的一条 `llm-pi-ai` route，把密钥写进
-> `$DSH_HOME/.env`（权限 `0600`），并顺手设好默认模型——全程不需要任何插件。
-> 由于它的模型清单来自实时 `GET /v1/models` 的响应，而该响应显式包含 `auto`、`fusion` 与
-> 每条具名链的 `auto:<profile>` 行，**所以官方路径本来就能在 DSH 模型选择器里选到它们**。
-> 本插件是官方路径的**可选替代/增强，不是必需品**。建议先看
-> [与官方 `setup-dsh` 的关系](#与官方-setup-dsh-的关系)，再自行取舍。
->
-> **一条硬约束**：两条路径注册的是同一个 DSH provider 路由名（`freellmapi`），因此**不能同时
-> 启用**。如果你已经跑过 `setup-dsh`，请先移除它那条 `freellmapi` 路由，或者干脆不装本插件。
+> 这是一个社区项目，与它所访问的任何上游 provider、与 freellmapi 项目、与 DeepSeek **均无隶属
+> 关系**，未获其背书、赞助或支持；也不是 DSH 的官方插件。各 provider 名称、"DeepSeek Harness" 与
+> `@deepseek-ai/*` 的权利归各自所有者。本项目采用 [MIT 许可证](LICENSE)。
+> **遵守各家服务条款是你自己的责任；免费档可能记录甚至用你的请求做训练，请自行判断。**
 
 ---
 
 ## 目录
 
-- [本插件带来的增量](#本插件带来的增量)
-- [与官方 `setup-dsh` 的关系](#与官方-setup-dsh-的关系)
-- [前置条件](#前置条件)
-- [安装](#安装)
+- [快速开始](#快速开始)
+- [你会得到什么](#你会得到什么)
+- [零配置：一个 key 都不配时能用什么](#零配置一个-key-都不配时能用什么)
+- [添加 key](#添加-key)
+- [它怎么选模型](#它怎么选模型)
+- [故障转移与健康度](#故障转移与健康度)
+- [两种模式：`direct` 与 `gateway`](#两种模式direct-与-gateway)
 - [配置](#配置)
-- [使用 Auto 模式](#使用-auto-模式)
+- [怎么看出它做了什么](#怎么看出它做了什么)
+- [只配一家？一家都不配？](#只配一家一家都不配)
 - [架构](#架构)
 - [故障排查](#故障排查)
-- [卸载](#卸载)
+- [限制与未验证项](#限制与未验证项)
 - [兼容性](#兼容性)
 - [开发](#开发)
-- [限制与未验证项](#限制与未验证项)
-- [本文所述内容的核实方式](#本文所述内容的核实方式)
 - [许可证](#许可证)
 
-## 本插件带来的增量
+## 快速开始
 
-只有四条，没有别的。四条都围绕**可观测性与使用体验**，而不是"能不能连上网关"——后者官方
-配置方式已经解决了。
-
-| # | 增量 | 为什么有用 |
-|---|---|---|
-| 1 | **`X-Routed-Via` 可见**。freellmapi 的每个响应都带 `X-Routed-Via: <platform>/<model>`，这是唯一能告诉你"这次请求实际由哪家 provider 的哪个模型服务"的头。本插件读取它并写进 DSH 日志（由配置开关控制）。DSH 里通用的 `openai-completions` pi-ai 路径不会把上游响应头透出来，在那种路径下"到底是谁答的"始终是黑盒。**这一条是基于适配器设计的判断，不是对 pi-ai 内部实现的实测结论。** | 用了 Auto 模式，就是让路由器替你挑；知道它挑了什么，才是重点。 |
-| 2 | **freellmapi 专有错误被翻译成可操作的提示**。未知的 `auto:<profile>` 名是上游 `400`；配额耗尽 / 限流是上游 `429`（若是**月度预算**耗尽，还会带 `Retry-After` 与 `error.code: "quota_exceeded"`）。插件把这些翻成"下一步该做什么"的提示，而不是甩你一句 `HTTP 429`。 | 你会直接看到"加把 key / 等到下个 UTC 月初 / 名字写错了"，而不是靠猜。 |
-| 3 | **不动你的全局 DSH 配置**。`baseURL`、凭据引用名以及所有其它开关都在插件自己的配置里，不会往 `$DSH_HOME/settings.yaml` 或 `$DSH_HOME/.env` 写任何东西。 | 网关设置留在你能看见的地方，事后重跑 `setup-dsh` 也不会悄悄改掉本插件的端点。代价是真实的——见下一节：两条路径抢同一个 DSH 路由名，所以**只能启用其中一个**。 |
-| 4 | **模型列表在运行期刷新**。模型来自运行中路由器的 `GET /v1/models`；你在 freellmapi 面板里接上一家新 provider，DSH 这边不用重跑 CLI 就能看到。 | 不用每次网关有变动就重新生成一份快照。 |
-
-它**刻意不做**的事：不直连各上游 provider、不取代路由器、不代管 freellmapi 的 key，也不会
-让 Auto 模式"从不可能变成可能"（网关与官方接入方式本来就做到了）。
-
-## 与官方 `setup-dsh` 的关系
-
-freellmapi 官方文档给出了一条**完全不需要插件**的一等 DSH 接入方式：
-
-```bash
-# 1. 先确认网关已经跑起来（见「前置条件」），然后：
-npx freellmapi setup-dsh --url http://localhost:3001 --api-key <unified-key>
-
-# 2. 照常启动 DSH：
-npx @deepseek-ai/dsh web
-```
-
-它往 `$DSH_HOME`（默认 `~/.dsh`）写两份东西：
-
-```yaml
-# $DSH_HOME/settings.yaml
-llm-pi-ai:
-  providers:
-    freellmapi:
-      displayName: FreeLLMAPI
-      apiKeyEnv: FREELLMAPI_API_KEY      # 真正的密钥在 $DSH_HOME/.env（0600）
-      api: openai-completions            # 复用 DSH 自带的 pi-ai 适配器
-      baseURL: http://localhost:3001/v1
-      models:                            # 取自实时 GET /v1/models 目录
-        - { id: auto, name: Auto (router picks the best available model), contextWindow: … }
-        - { id: auto:smart, name: …, contextWindow: … }
-        # … 以及目录里每一个具体模型
-agent-default-model:
-  provider: freellmapi
-  model: auto
-```
-
-```dotenv
-# $DSH_HOME/.env   （权限 0600）
-FREELLMAPI_API_KEY=freellmapi-…
-```
-
-有三个结论必须讲清楚：
-
-1. **官方路径本来就能用 Auto 模式。** `GET /v1/models` 显式列出了 `auto`、`fusion`，以及每条
-   具名回退链对应的 `auto:<profile>` 行，`setup-dsh` 把这些写进 `models:`，DSH 的选择器自然
-   就能选。**选 `auto` 不需要本插件。**
-2. **官方路径是更稳妥的默认选择。** 它由上游维护、一条命令搞定、走的是 DSH 自带的适配器，
-   而不是第三方代码。
-3. **两条路径互斥。** 官方那条 route 是 `llm-pi-ai.providers.freellmapi`，它在 DSH 里的
-   provider 名就是 `freellmapi`；本插件注册的 provider 路由也是 `freellmapi`。provider 路由名
-   在一个 DSH 进程内唯一，所以后注册的那一方会被拒绝。如果你已经跑过 `setup-dsh`，请先移除它
-   那条 `freellmapi` 路由再装本插件——或者保留官方路由、别装本插件。真弄错了也不会让你猜：
-   插件会拒绝加载，并在错误信息里点名这处冲突。
-
-那什么时候值得装本插件？
-
-| | 官方 `setup-dsh` | 本插件 |
-|---|---|---|
-| 在 DSH 里可选 `auto` / `auto:<策略>` / `auto:<profile>` | ✅ 可以 | ✅ 可以 |
-| 模型列表来源 | 配置时刻抓一次 `GET /v1/models` | 运行期抓 `GET /v1/models`，可刷新 |
-| 谁在服务这次请求（`X-Routed-Via`） | ❌ 不透出 | ✅ 写进 DSH 日志（有开关） |
-| freellmapi 专有 `400` / `429` 文案 | 通用适配器错误 | ✅ 已翻译 |
-| 网关错误 / 回退轨迹可见性 | ❌ | ✅ 有则记录 |
-| 是否改写 `$DSH_HOME/settings.yaml` / `.env` | ✅ 会（结构化合并 + 带时间戳备份） | ❌ 不会，配置留在插件里 |
-| 能否与另一方同时启用 | ❌ | ❌ —— 两者都占用 DSH provider 路由 `freellmapi`，只能二选一 |
-| 塞进 profile 的额外代码 | 无 | 一个第三方 bundle |
-| 由谁维护 | freellmapi 项目 | 本仓库 |
-
-**诚实的结论：本插件是官方路径的可选替代/增强，不是必需项。** 想要最小、最受上游支持的
-方案，就用 `setup-dsh`；如果恰好需要"看见实际服务方"和"网关感知的错误提示"，本插件补的正是
-这一块。
-
-## 前置条件
-
-| 项 | 说明 |
-|---|---|
-| **一个运行中的 freellmapi 网关** | 默认在 `http://localhost:3001` 可访问。OpenAI 兼容根地址 `http://localhost:3001/v1` 与面板（dashboard）共用这个端口。 |
-| **统一 API key** | 形如 `freellmapi-…`，在网关面板的 **Keys** 页生成。这是**单个网关 key**，不是你某家上游的 key。 |
-| **DeepSeek Harness** | 本插件针对运行时 `0.2.0-rc.2` 编写（见[兼容性](#兼容性)）。 |
-| **Node.js** | `>= 22`（与 DSH 运行时及参考 DSH 插件的声明一致）。 |
-
-### 把网关跑起来
-
-上游仓库是这里的权威，官方支持两种形态：
-
-```bash
-# 上游推荐：克隆仓库后用自带的 compose 文件起服务
-git clone https://github.com/tashfeenahmed/freellmapi.git
-cd freellmapi
-docker compose up -d
-# 镜像：ghcr.io/tashfeenahmed/freellmapi:latest（多架构：amd64 + arm64）
-
-# 或者直接从源码跑（server 与 dashboard 共用 :3001）：
-npm run build && node server/dist/index.js
-```
-
-上游仓库的 `desktop/` 下还有桌面版构建，`docs/en/clients/01-agent-clients.md` 里有面向各
-Agent 客户端的接入说明。
-
-### 装插件之前，先确认网关是通的
-
-```bash
-curl -s http://localhost:3001/v1/models \
-  -H "Authorization: Bearer freellmapi-<unified-key>" | head -c 400
-```
-
-应当返回 OpenAI 形状的 `{"object":"list","data":[…]}`，且开头几条包含 `auto` 与 `fusion`。
-这一步不通就别往下装了——插件救不了一个不响应的网关。
-
-只看"此刻能服务"的模型：
-
-```bash
-curl -s "http://localhost:3001/v1/models?available=true" \
-  -H "Authorization: Bearer freellmapi-<unified-key>"
-```
-
-## 安装
-
-有三条路，**选一条**即可。注意不要把 A/B 与 C 里那条手写 patch 行叠加使用，原因见本节末尾。
-
-### 方法 A —— DSH 插件管理器（图形界面）
-
-1. 打开 DSH Web GUI。
-2. 进侧边栏的**插件**管理器（插件清单页）。
-3. 用其中的**安装 / 添加**入口，粘贴下面任意一种 spec：
-   - `dsh-freellmapi` —— npm registry 包名（包发布到 npm 之后可用）；
-   - `github:lion231226/dsh-freellmapi` —— 直接从 GitHub 装，无需先发 npm；
-   - `github:lion231226/dsh-freellmapi#v0.1.0` —— 钉到某个 tag 或提交。
-4. 确认。管理器会替你调用 profile 的包管理器、把该包登记为 profile bundle；如果 DSH 提示，
-   重启应用。
-
-管理器接受 registry 包名、绝对本地路径、git 地址与 tarball URL，并且会**拒绝任何 manifest
-里没有声明 `dsh.bundle` 的 spec**——本包声明了，所以它是被当作真正的 profile bundle 装进去，
-而不是一条装了也白装的普通依赖。
-
-### 方法 B —— `dsh plugin` 命令行
-
-```bash
-# GitHub spec
-dsh plugin --profile desktop add github:lion231226/dsh-freellmapi
-
-# npm spec（包发布之后）
-dsh plugin --profile desktop add dsh-freellmapi
-
-# 把 profile 里已经声明的依赖装齐（手工改过 package.json 之后用）
-dsh plugin --profile desktop install
-```
-
-`add` 与 `install` 这两个子命令来自 DSH 运行时自己打印的错误文案
-（`run 'dsh plugin --profile <name> install' if its dependency is not installed`、
-`create it with 'dsh plugin --profile <name> add <package>'`）。把 `desktop` 换成你的 profile
-名，也就是 `$DSH_HOME/profiles/` 下的那个目录名。
-
-> ⚠️ **本仓库没有做过端到端验证。** 子命令名取自 DSH 运行时的原始文案，而不是在真实 profile
-> 上跑过的结果。动手写脚本前请先用你的 DSH 版本确认命令表面；拿不准就用方法 A。
-
-直接手敲包管理器命令**不能**替代 `dsh plugin add`：在 profile 目录里 `pnpm add`（或
-`npm install`）只会把包装进 `node_modules`，不会把它登记为 profile bundle，于是 DSH 只把它
-当普通依赖加载，模型列表里什么都不会出现。真要手工装，请把方法 C 也做完。
-
-### 方法 C —— 手工放置
-
-适用于内网/离线机器、正在本地改的 checkout，或者你就是想看清到底改了哪些地方。
-
-1. 把构建好的包放到：
+1. **装插件** —— 打开 DSH Web GUI，进侧边栏的**插件**管理器，安装 bundle 时粘贴下面任意一种 spec：
 
    ```text
-   $DSH_HOME/profiles/<profile>/node_modules/dsh-freellmapi/
+   github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
+   github:lion231226/dsh-freellmapi#v0.2.0   # 钉到某个 tag
+   dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
-   （本地 checkout 也可以做成链接而不是拷贝——参考 DSH 插件用的就是
-   `"file:node_modules/<包名>"` 这种写法。）
+   CLI 写法和手工放置见[安装细节](#安装细节)。
 
-2. 在 `$DSH_HOME/profiles/<profile>/package.json` 里登记它，**两处都要改**：
+2. **（可选）粘几把 key** —— 见[添加 key](#添加-key)。跳过这一步是**受支持的配置**：两家免凭据
+   provider 照样能答。
 
-   ```jsonc
-   {
-     "dependencies": {
-       "dsh-freellmapi": "file:node_modules/dsh-freellmapi"
-     },
-     "dsh": {
-       "profile": {
-         "bundles": [
-           "@deepseek-ai/dsh-base",
-           "@deepseek-ai/dsh-web-app",
-           "dsh-freellmapi"            // ← 少了这一行，包永远不会被加载
-         ]
-       }
-     }
-   }
+3. **选模型** —— 在 DSH 的模型选择器里选 provider **FreeLLMAPI (Auto)**、模型 `auto`。
+
+4. **看它干活** —— `logRouting` 默认打开，每个请求一行日志：
+
+   ```text
+   dsh-freellmapi: tier=complex -> openrouter/deepseek/deepseek-v3.1:free (capability=5, speed=3, 2 candidates tried)
    ```
 
-3. 把依赖落实到位，然后重启 DSH：
+安装到这里就结束了，下面全是细节。
 
-   ```bash
-   dsh plugin --profile desktop install
-   ```
+### 安装细节
 
-为什么两处都要：运行时组合 loader 树时走的是 `dsh.profile.bundles`，而 `dependencies` 决定
-这个包**能不能被解析到**。装上了但没进 `bundles`，会被静默忽略；列在 `bundles` 里却没装，
-启动时会报"这个 bundle 解析不了"。
+| 方法 | 做法 |
+|---|---|
+| **插件管理器（推荐）** | 侧边栏 → **插件** → 安装 → 粘贴 `github:lion231226/dsh-freellmapi`（或发布后的 npm 包名），确认，需要时重启 DSH。管理器接受 registry 包名、绝对路径、git 地址与 tarball URL，并会拒绝任何 manifest 里没有 `dsh.bundle` 的 spec——本包声明了。 |
+| **`dsh plugin` 命令行** | `dsh plugin --profile desktop add github:lion231226/dsh-freellmapi` —— 子命令名取自 DSH 运行时自己的错误文案；⚠️ 本仓库未端到端验证过，动手前请用你的 DSH 版本确认。 |
+| **手工放置** | 把包放到 `$DSH_HOME/profiles/<profile>/node_modules/dsh-freellmapi/`，在 profile 的 `package.json` 里**同时**加进 `dependencies` 与 `dsh.profile.bundles`，然后 `dsh plugin --profile <profile> install` 并重启。进 `bundles` 才是 DSH 真正加载它的原因。 |
 
-**插件自带的 patch 文件**（在包内，不需要你写）是一个顶层 YAML 数组，也是"正确安装的
-bundle 不需要手写 patch 行"的原因：
+本包自带 `cordis.patch.yml`（`- insert: [{ id: freellmapi, name: 'dsh-freellmapi' }]`），所以正确安装
+的 bundle 不需要你手写任何 patch 行。**千万不要**在 profile 自己的 `cordis.patch.yml` 里再插一行同
+`id` 的记录：两个同 id 的 entry 会让组合树以 `duplicate loader entry id "freellmapi"` 直接拒绝启动。
+
+## 你会得到什么
+
+| | |
+|---|---|
+| **自包含的路由** | 路由智能在插件里。默认的 `direct` 模式不需要网关、不需要常驻进程、不需要 Docker，只要有 DSH。 |
+| **内置 12 家 / 30 个模型的池子** | Groq、Cerebras、OpenRouter、GitHub Models、Mistral、Z.ai（智谱）、火山方舟、LongCat、LLM7、Kilo、NVIDIA NIM、OVH AI Endpoints——每个模型都带能力、速度、上下文、视觉与工具调用的事实标注。 |
+| **逐请求的复杂度路由** | 每个请求都被打分并分成 `simple` / `medium` / `complex` 三档；档位决定排序里"能力优先"还是"速度优先"。一句"列出目录里的文件"和一个带 12 个工具的重构任务，不会落到同一个模型上。 |
+| **自动故障转移** | 被限流（429）、报错（5xx）、超时或 `model_unavailable` 的候选会被"停车"，然后按排名试下一个——**且只允许在第一个 chunk 发出之前**换家，所以一条回答绝不会由两个模型拼接而成。 |
+| **健康度与冷却** | **首次可重试失败就已经停车**（2 分钟），之后每次连续失败升一级：2 分钟 → 10 分钟 → 1 小时 → 24 小时。provider 给的 `Retry-After` 永远优先；凭据被拒（401/403）则该家停车 24 小时。降权会按 60 秒半衰期衰减，所以一次 429 绝不会变成"无期徒刑"。 |
+| **零配置即可起步** | Kilo 与 LLM7 不需要任何凭据就能答；全新安装在你配任何东西之前就已经有非空候选池。 |
+| **诚实的诊断信息** | 每个请求一行日志，写明档位、胜出者与试了几家；所有失败都是带内 `finish` chunk 加稳定错误码，绝不抛异常。 |
+| **`gateway` 模式原样保留** | v0.1.0 的行为——转发给外部 [freellmapi](https://github.com/tashfeenahmed/freellmapi) 网关——仍在 `mode: gateway` 后面，一字未改，给想要网关自己的 bandit 打分、缓存与 `fusion` 的人。 |
+
+## 零配置：一个 key 都不配时能用什么
+
+池子里有三家被标为 **keyless**（完全不发 `Authorization` 头）。维护者在 2026-10-13 用**不带任何
+凭据**的真实请求验证过（`_lead/live-probe-2026-10-13.md`）：
+
+| Provider | 模型 | 结果 |
+|---|---|---|
+| `kilo`（`https://api.kilo.ai/api/gateway/v1`） | `nvidia/nemotron-3-super-120b-a12b:free` | **HTTP 200**，真实补全 |
+| `kilo` | `nvidia/nemotron-3-ultra-550b-a55b:free` | 免费路由，550B 量级 |
+| `ovh`（`https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`） | `gpt-oss-120b` | **HTTP 200** |
+| `llm7`（`https://api.llm7.io/v1`） | `DeepSeek-V4-Flash-0731` | **HTTP 200**（匿名） |
+| `llm7` | `codestral-latest` | **HTTP 200**（匿名） |
+
+`kilo` 与 `llm7` **默认启用**，"装完即可用"这条承诺就靠这两家撑起来。`ovh` 虽然也免凭据，但**默认
+关闭**（2 请求/分钟，放进默认候选集太挤）；想用就显式打开。
+
+依赖免凭据池之前，有三件事你必须知道：
+
+- **免凭据不等于无限量。** Kilo 文档口径约 200 请求/小时每 IP，LLM7 约 100/小时，OVH 只有 2 RPM。
+  本文里所有额度数字都来自上游 registry 的 2026-04 基线，可能过期；插件的做法不是相信它们，而是
+  对它们做出反应——遇到 429 就把该候选停车、换下一个。
+- **免费流量可能被记录并用于训练。** Kilo 在自己的 provider registry 里明说了免费 prompt 与输出会
+  被记录用于训练。如果你不能接受，关掉它：
+
+  ```yaml
+  providers:
+    kilo:
+      enabled: false
+  ```
+
+  关掉 `kilo` 之后，零配置仍然能靠 `llm7` 单独工作。
+- **免费模型目录会漂移。** 2026-10-13 的探针里，`llm7` 对 `gpt-oss-20b` 与 `GLM-4.6V-Flash` 返回了
+  `400 model_unavailable`——同样的 id 前一天还能用。路由器把 `model_unavailable` 当作**逐模型**的
+  状态：给这个 `(provider, model)` 组合停车，换下一个候选，而不是让你的请求失败。看到这种报错属于
+  正常运行，不是 bug。
+
+## 添加 key
+
+key 是性价比最高的一步：默认候选池是 `groq`、`cerebras`、`openrouter`、`kilo`、`llm7`，把前三家补上
+就有了又强又快的模型。
+
+给 key 的方式是导出 `apiKeyEnv` 指定的那个环境变量——或者在**设置 → 模型 / 插件**里粘贴，由 DSH 的
+凭据服务保存。解析顺序是：凭据服务 → `config.providers[id].apiKey` → `apiKeyEnv` 指定的环境变量 →
+约定名 `<PROVIDER_ID>_API_KEY`。空值一律等于"未配置"。
+
+| Provider | `apiKeyEnv` | 申请入口 | 免费额度（上游基线） | 默认 | 备注 |
+|---|---|---|---|---|---|
+| `groq` | `GROQ_API_KEY` | <https://console.groq.com/keys> | 30 RPM / 1000 RPD / ~8K TPM / 200K TPD | ✅ 开 | 快；`openai/gpt-oss-120b`、`llama-3.3-70b-versatile`、`llama-3.1-8b-instant` |
+| `cerebras` | `CEREBRAS_API_KEY` | <https://cloud.cerebras.ai/> | 30 RPM / 无 RPD / 60K TPM / 1M TPD | ✅ 开 | 两个模型同时是能力 5 与速度 5；上游另有一版更紧的额度记录（5 RPM / 30K TPM） |
+| `openrouter` | `OPENROUTER_API_KEY` | <https://openrouter.ai/keys> | 20 RPM / 200 RPD | ✅ 开 | `complex` 档的主力（`deepseek/deepseek-v3.1:free`、`moonshotai/kimi-k2.6:free`、`qwen/qwen3-coder:free`） |
+| `llm7` | `LLM7_API_KEY` | <https://token.llm7.io/> | 约 100 请求/小时 | ✅ 开 | **免凭据可用**；有 key 只是抬高上限。申请页是文档级证据，未经独立复核 |
+| `kilo` | `KILO_API_KEY` | — | 约 200 请求/小时每 IP | ✅ 开 | **免凭据可用。** 免费流量会被记录用于训练 |
+| `github` | `GITHUB_MODELS_TOKEN` | — | 10 RPM / 50 RPD | ⬜ 关 | 有 `openai/gpt-5`，但限流极紧 |
+| `mistral` | `MISTRAL_API_KEY` | <https://console.mistral.ai/api-keys> | 500K TPM | ⬜ 关 | `mistral-large-latest`、`magistral-medium-latest`、`codestral-latest` |
+| `zhipu` | `ZHIPU_API_KEY` | — | 约 1M TPD | ⬜ 关 · ⚠️ **推测** | `glm-4.7-flash`、`glm-4.6v-flash`。**`baseURL` 是整个池子里风险最高的一项**：国内站与海外站的 key 不互通，主机名选错必然 401。只有你清楚自己的 key 属于哪个站时才开。 |
+| `volcengine` | `ARK_API_KEY` | — | 约 2M TPD | ⬜ 关 · ⚠️ **推测** | 国内 provider，需实名；模型 id 是推断的，未经实测 |
+| `longcat` | `LONGCAT_API_KEY` | — | — | ⬜ 关 · ⚠️ **推测** | 无需实名；模型 id 是推断的，未经实测 |
+| `nvidia` | `NVIDIA_API_KEY` | — | 40 RPM | ⬜ 关 | 能力上限高（`qwen/qwen3-coder-480b-a35b-instruct`），但试用 ToS 写着 "evaluation only"、首字节可能几分钟，另见[限制](#限制与未验证项)里的一条已知缺口 |
+| `ovh` | `OVH_AI_ENDPOINTS_KEY` | — | 2 RPM | ⬜ 关 | **免凭据可用**，但只有 2 RPM |
+
+> **`apiKeyEnv` 是本插件自己的命名约定，不是上游事实。** freellmapi 本身没有这个概念——它的 key 存在
+> dashboard 背后的加密库里。上表每个名字都是**默认值**，你可以逐家覆盖，所以"我们猜偏了"这件事
+> 本身无害：
 
 ```yaml
-# node_modules/dsh-freellmapi/cordis.patch.yml
-- insert:
-    - id: freellmapi            # loader entry id 同时也是设置命名空间 id
-      name: 'dsh-freellmapi'    # 必须能从 profile 解析到
+providers:
+  groq:
+    apiKeyEnv: MY_GROQ_KEY        # 你想起什么名字都行
+  mistral:
+    enabled: true
+  acme-gateway:                   # 一个根本不在内置池里的 provider
+    baseURL: https://llm.example.com/v1
+    apiKeyEnv: ACME_KEY
+    keyless: false
+    models:
+      - id: acme-large
+        name: Acme Large
+        capability: 5
+        speed: 3
+        contextWindow: 131072
+        maxTokens: 16384
+        toolCalling: true
 ```
 
-> ⚠️ **只有当你"装了包但没登记成 bundle"**（也就是跳过了上面第 2 步的 `bundles` 那行）时，
-> 才需要在 `$DSH_HOME/profiles/<profile>/cordis.patch.yml` 里自己插入这一行：
+## 它怎么选模型
+
+每个请求都由一个**纯粹、确定性**的分类器（`lib/complexity.js`）打分：不读时钟、不掷随机数、不联网、
+不改动入参。同一段对话永远走同一条路，而且打出这个结论的每个信号都会被记录下来。
+
+### 三个档位
+
+| 档位 | 分数 | 对排序的含义 |
+|---|---|---|
+| `simple` | `< 0.34` | 能力占 0.25、速度占 0.75——能干活的最快那个 |
+| `medium` | `0.34 – 0.67` | 0.50 / 0.50——均衡 |
+| `complex` | `≥ 0.67` | 能力占 0.80、速度占 0.20——最强优先，慢一点无所谓 |
+
+### 打分的信号
+
+七个信号，各自归一到 `[0, 1]` 后乘上自己的权重，再用 **noisy-OR** 合成——这样"几个互相独立的吃重
+维度"会叠加，而不是被平均掉：
+
+```text
+score = 1 − Π (1 − wᵢ · sᵢ)  −  simplePenalty
+```
+
+| 信号 | 权重 | 饱和点 | 读的是什么 |
+|---|---|---|---|
+| `tokens` | 0.46 | 2500 估算 token | 输入规模。中文约 1 token/字，拉丁文约 1 token/4 字符 |
+| `tools` | 0.52 | 8 个工具 schema | 模型必须照着执行指令的工具数量 |
+| `keywords` | 0.60 | 2 个不同词族 | `refactor`、`architect`、`prove`、`debug`、`重构`、`架构`、`证明`、`为什么` 等 |
+| `reasoning` | 0.50 | — | 数学记号（0.25）、比较词（0.25）、"step by step"（0.5） |
+| `code` | 0.32 | 2 个块 / 120 行 | 围栏代码块（40%）与其行数（60%） |
+| `depth` | 0.20 | 20 条消息 / 6 轮 | 对话长度与 assistant+tool 轮数 |
+| `images` | 0.06 | 2 张图 | 是否带图——外加一条**硬地板：至少 medium**，因为只有视觉模型能服务它 |
+
+"简单任务词"（`translate`、`summarize`、`list`、`翻译`、`总结`、`列出` 等）会**扣掉** 0.22——这是唯一
+能把分数往下拉的信号。
+
+### 实测例子（不是我编的）
+
+对着本实现跑出来的结果：
+
+| 请求 | 档位 | 分数 | 为什么 |
+|---|---|---|---|
+| `列出这个目录下的文件` | `simple` | 0.000 | 10 个 token，一个简单任务词把分数扣光 |
+| `解释这段代码` + 200 行围栏代码块 | `medium` | 0.349 | 659 估算 token 加 200 行代码——刚刚越过 `medium` 边界 |
+| `重构这个模块并给出架构权衡与失败模式分析` + 12 个工具 schema | `complex` | 0.822 | 12 个工具、4 个复杂关键词、1 个比较标记——而且只有约 27 个 token，换成加权**平均**就会被抹平 |
+
+档位到底改变了什么？在默认池、所有 key 都配好的情况下：
+
+| 名次 | `simple` | `complex` |
+|---|---|---|
+| 1–5 | cerebras `llama-4-maverick-17b`（c5/s5）、cerebras `qwen-3-coder-480b`（c5/s5）、cerebras `gpt-oss-120b`（c4/s5） | 同样两个 c5/s5 模型，然后是 kilo `nemotron-3-super-120b`（c5/s3） |
+| 6–7 | cerebras `llama3.1-8b`（c2/s5）、groq `llama-3.1-8b-instant`（c2/s5） | openrouter `deepseek-v3.1:free`（c5/s3）、`kimi-k2.6:free`（c5/s3） |
+| 16–17 | openrouter `qwen3-coder:free`（c5/s3）、`nemotron-nano-12b-v2-vl`（c3/s3） | cerebras `llama3.1-8b`（c2/s5）、groq `llama-3.1-8b-instant`（c2/s5） |
+
+（两个 Cerebras 模型同时是能力 5 与速度 5，所以它们在任何档位都排第一，这是合理的。档位决定的是它们
+**之后**的顺序——小快模型就是从第 17 名跳到第 6 名的那一段。）
+
+### 它什么时候会判错——以及你怎么覆盖
+
+**这是启发式规则，不是语义理解。** 它数 token、数围栏、数工具 schema、数词。两个方向都可能判错，
+下面是本实现里的真实案例：
+
+| 请求 | 档位 | 为什么不对 |
+|---|---|---|
+| `证明这个定理` | `simple`（0.304） | 一个复杂词族只饱和到一半，而请求只有六个 token——一个真正需要推理的任务落进了快车道 |
+| 3750 个 token 的无关键词长文 | `medium`（0.463） | 光靠 token 最高只能贡献 0.46，够不到 `complex` 边界——一段长而吃力的分析，光凭体量永远进不了 `complex` |
+| `翻译这段话` + 12 个工具 | `medium`（0.413） | 工具信号把它推上去，简单任务惩罚又把它拉下来 |
+
+所以当你比分类器更清楚时，直接说出来——**模型 id 本身就是覆盖开关**：
+
+| 模型 | 效果 |
+|---|---|
+| `auto` | 先分类再路由（默认） |
+| `auto:simple` | 强制快车道 |
+| `auto:medium` | 强制均衡档 |
+| `auto:complex` | 强制最强档 |
+
+强制档位时分类器**照跑**——分数与理由都会记录，日志行会注明 `(forced by the selected model id)`——
+只是档位不再由它决定。
+
+想调阈值而不是钉死档位（高级用法，建议写在 profile patch 里）：
+
+```yaml
+routing:
+  thresholds:
+    medium: 0.25      # 默认 0.34——更多请求变成 medium
+    complex: 0.55     # 默认 0.67——更多请求变成 complex
+  weights:
+    tokens: 0.60      # 这是"单独饱和时的最大贡献"，不是占总量多少
+    tools: 0.40
+```
+
+## 故障转移与健康度
+
+**唯一一条硬规则：故障转移只允许发生在第一个 chunk 到达 DSH 之前。** 一旦有任何 chunk 被 yield 出去
+（哪怕只是个 `block-start`），再失败就只能以错误结束这条流，绝不能换家——把两个模型的输出拼进同一条
+assistant 消息，比诚实地失败更糟。这条规则被实现了**两遍**（`dispatchOnce` 与 failover 循环各自独立
+复检），并用"流中途把 socket 掐断 + 一个健康的备用 provider"测试过：备用 provider 必须收到 **0 次**
+请求。
+
+哪些情况会重试：
+
+| 情况 | 换家？ | 理由 |
+|---|---|---|
+| `429`、`408`、`409`、`410`、`422`、`5xx` | ✅ | 那是这一家的问题，下一家很可能能答 |
+| `404` | ✅ | 通常意味着"这家没有这个 id"——而且它会给这个组合停车，与下面的 `model_unavailable` 一致 |
+| `400 model_unavailable` | ✅ | 这是"400 就是坏请求"的**刻意例外**：聚合器会滚动目录，所以它是 `(provider, model)` 的状态 → 与 `404 model_not_found` **完全同样地停车**，再换下一个候选 |
+| 其它 `400` | ❌ | 坏请求换到哪家都是坏请求 |
+| `401` / `403` | ❌ | 凭据被拒是这一家的事，直接停车 24 小时 |
+
+健康度与冷却：
+
+- **首次可重试失败就已经把候选停车**，停 2 分钟——没有"攒够三次"的宽限期：免费额度下的 429 意思就是
+  "现在该退避"，第一次不 park 只会让下一个请求再撞一次同一堵墙、白付一次延迟。之后每次连续失败升一级：
+  **2 分钟 → 10 分钟 → 1 小时 → 24 小时**。带 `Retry-After` 时以它为准——只有 provider 自己知道额度
+  什么时候重置。
+- 失败同时会降权，让刚失败过的候选排在健康同伴之后：`1 / (1 + 0.15 · effectiveFailures)`（下限 0.4）。
+  `effectiveFailures` **按 60 秒半衰期衰减**，所以这个惩罚不可能把候选永久饿死：等到 2 分钟冷却过期时，
+  一次失败的权重只剩 0.25，而一次成功就把计数直接清零。
+- 延迟只有在构成真实证据时才参与排序：
+  - 因子是 `fastest / latency`，钳制在 `[0.85, 1]`，其中 fastest 取**本次请求**里已测到的最快者；
+  - **没被测量过的候选不再拿满分。** 自己没有证据时，就按"不会快过本次请求里已测到的最慢因子"处理；
+    只有当完全测不到任何样本时，这个信号才整体退出（所有人都得 1）。否则"我们从没看过它"会赢过
+    "我们测过而且它很慢"，那是反的；
+  - 外加一道 **100 毫秒噪声门**：已测候选之间的极差小于它时，整个延迟信号按预热噪声丢弃（本机 4ms
+    与 26ms 的差别不代表吞吐量），所有候选都按"未测量"计分。
+  因为降幅上限是 0.85，延迟可以重排候选，但翻不动档位已经做出的"能力 vs 速度"决策。
+- 流中途失败**不会**给该家停车（一次断流证据太弱），只计入失败次数，影响下一次排名。
+- 尝试次数受 `routing.maxAttempts`（默认 6）与 `routing.budgetMs`（默认 45 000 毫秒）限制，两者都在
+  每次尝试**之前**检查。
+
+终结性结局，全部以带内 `finish` chunk 交付，而不是抛异常：
+
+| 错误码 | 含义 |
+|---|---|
+| `NO_CANDIDATES` | 池子里没有可用候选——什么都没配且没有启用免凭据家，或所有候选都被硬门槛挡掉（视觉 / 工具 / 上下文 / 冷却）。message 里会列出申请 key 的入口。 |
+| `ALL_CANDIDATES_FAILED` | 排好序的候选全试过且全失败；message 里带 `provider/model → 错误码` 的清单。 |
+| `STREAM_INTERRUPTED` | 已经吐过输出之后流断了——按设计不再换家。 |
+| `MODEL_UNAVAILABLE` | 这家当前没有这个模型。 |
+| `ABORTED`、`TIMEOUT`、`TRANSPORT`、`AUTH`、`RATE_LIMIT`、`QUOTA`、`CONTEXT_WINDOW_EXCEEDED`、`UNSUPPORTED_CONTENT`、`UNSUPPORTED_OPTION`、`INVALID_REQUEST`、`SERVER`、`MISSING_CREDENTIAL`、`INVALID_CREDENTIAL`、`EMPTY_RESPONSE`、`CONTENT_FILTER`、`UNKNOWN` | 常见的逐次尝试分类 |
+
+## 两种模式：`direct` 与 `gateway`
+
+| | `direct`（**默认**） | `gateway` |
+|---|---|---|
+| 谁在路由 | 本插件（分类器 + 排序 + 故障转移） | 外部 [freellmapi](https://github.com/tashfeenahmed/freellmapi) 网关 |
+| 需要外部进程 | ❌ 不需要 | ✅ 需要（Docker 或 `node server/dist/index.js`，监听 `:3001`） |
+| 凭据 | 每家一把 key，或者一把都不要 | 一把统一的 `freellmapi-…` 网关 key |
+| 模型选择器 | `auto`、`auto:simple/medium/complex`，再是 `provider/model` | `auto`、`auto:smart/fast/cheap/reliable/balanced`、`fusion`、发现到的目录 |
+| 日志行 | `dsh-freellmapi: tier=… -> provider/model (…)` | `dsh-freellmapi: routed via <platform>/<model> (model=…)` |
+| 什么时候用 | 想从"装完"到"能用"走最短的路 | 你已经在跑网关，或者想要它的 bandit 打分、`fusion`、prompt 压缩与面板 |
+
+切换只需要一个字段：
+
+```yaml
+mode: gateway            # 默认是 "direct"；gateway 还需要 baseURL 与一把 freellmapi-… key
+```
+
+> **两种模式可以在同一份安装里共存，但 `freellmapi` 这个 provider 名只能属于一个适配器。**
+> freellmapi 官方的 `npx freellmapi setup-dsh --url http://localhost:3001 --api-key <key>` 写的是
+> `llm-pi-ai.providers.freellmapi`，它在 DSH 里的 provider 名同样是 `freellmapi`。provider 路由名在
+> 单进程内唯一，所以后注册的一方会被拒绝。如果你已经跑过 `setup-dsh`，请先移除那条路由再装本插件——
+> 插件会拒绝加载并点名这处冲突，而不是静默失败。
 >
-> ```yaml
-> - insert:
->     - id: freellmapi
->       name: 'dsh-freellmapi'
-> ```
->
-> **千万不要两边都写。** bundle 自己 insert 了一行，你又手写一行同样的 `id`，组合出的树里
-> 就会出现两个同 id 的 entry，DSH 会以 `duplicate loader entry id "freellmapi"` 拒绝启动该
-> profile。这是真实发生过的故障，也是推荐走图形界面安装的原因。
-
-### 安装后自检
-
-1. 插件管理器里能看到 `dsh-freellmapi`，且处于启用状态。
-2. **设置 → 模型**里出现 **FreeLLMAPI (Auto)** 这条 provider 路由（插件把它注册为可配置 provider，
-   所以还没填 key 时也应当可见）。
-3. 模型选择器里能选到 `auto` 以及至少一个 `auto:<策略>`。
-4. 选 `auto` 发一句话，返回的是文本，而不是 `MISSING_CREDENTIAL`。
-
-第 2、3 步不成立时，见[故障排查](#故障排查)。
+> 另外说清楚：**如果你要的只是那个网关，官方 `setup-dsh` 根本不需要插件。** 它会写
+> `$DSH_HOME/settings.yaml` 与 `$DSH_HOME/.env`（权限 `0600`）并设好默认模型。本插件的 `gateway` 模式
+> 是给想要"路由可见性"和逐请求失败细节的人准备的。
 
 ## 配置
 
-插件的配置 schema 同时就是它的设置页，所以下表每个字段都可以在图形界面
-（**设置 → 插件 → dsh-freellmapi**）里改，也可以在 profile 的 patch 文件里覆盖。所有字段都是
-实时的：改完下一次请求就生效，不用重启，也不会重新注册。
+每个字段都是**实时的**（设置改动下一次请求即生效，不用重启），并且校验是**全量兜底**的——非法取值会
+退回默认值，而不是让插件加载失败。
 
 | 字段 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
-| `baseURL` | string | `http://localhost:3001/v1` | 网关的 OpenAI 兼容根地址。插件在其后拼 `/chat/completions` 与 `/models`，结尾多余的 `/` 会被去掉。不是合法 `http(s)://` 地址时直接退回默认值，而不是留到 `fetch` 里才炸。 |
-| `apiKeyEnv` | string | `FREELLMAPI_API_KEY` | 凭据的**引用名**——环境变量名或凭据存储键，**不是**密钥本身。 |
-| `apiKey` | string（secret） | `''` | 可选的内联凭据。建议留空、改用 `apiKeyEnv`：填在这里的值会以明文形式存进 profile 的 patch。 |
-| `maxTokensField` | `max_tokens` \| `max_completion_tokens` | `max_tokens` | 用哪个 wire 字段承载输出上限。`max_tokens` 是规范字段（也是 freellmapi 文档里声明的那个）；网关同样接受 `max_completion_tokens`，两者都有时以 `max_tokens` 为准，所以只有某个模型明确要求时才切到后者。 |
-| `logRoutedVia` | boolean | `true` | 是否逐请求记录上游的 `X-Routed-Via`，以及存在时的 `X-Fallback-Attempts` / `X-Fallback-Trail`。 |
-| `includeFusion` | boolean | `true` | 是否在模型选择器里提供网关的 `fusion` 路由（一组模型作答 + judge 汇总）。 |
-| `exposeDiscoveredModels` | boolean | `true` | 是否把 `GET /v1/models` 的结果与虚拟 `auto:*` 路由一起列进选择器。 |
-| `vision` | boolean | `true` | 是否声明支持图片输入，让 DSH 真的把附件当图片发出去，而不是替换成文本。纯文本链可以设为 `false`。 |
-| `contextWindow` | number | `131072` | 网关没有描述上下文的那些路由所假定的上下文窗口（用于压缩预算）。 |
-| `maxTokens` | number | `0` | 向 DSH 声明的默认输出上限。`0` 表示不声明，交给网关与上游模型决定。 |
-| `timeoutMs` | number | `600000` | 单请求超时（毫秒）；`0` 表示不超时。超时会以 `TIMEOUT` 失败收尾。 |
-| `discoveryTimeoutMs` | number | `5000` | `GET /v1/models` 发现请求的超时。 |
-| `discoveryCacheMs` | number | `60000` | 一次成功的模型发现结果保持新鲜多久。 |
-| `headers` | map | `{}` | 附加请求头。`user-agent`、`authorization`、`content-type`、`accept` 为保留头，不可覆盖。 |
-| `taskType` | `''` \| `auto` \| `code` \| `chat` | `''` | 可选的 `X-FreeLLM-Task-Type` 提示，用于偏置路由（`code` 用速度换智能）。留空则不发这个头；上游的 `fastest`/`reliable` 链会忽略它。 |
-| `cacheMode` | `''` \| `on` \| `off` | `''` | 可选的 `X-FreeLLM-Cache` 开关，控制网关的精确匹配响应缓存。留空则不发这个头。 |
+| `mode` | `direct` \| `gateway` | `direct` | 自包含路由，或转发给外部网关 |
+| `baseURL` | string | `http://localhost:3001/v1` | 仅 gateway：freellmapi 网关的 OpenAI 兼容根地址 |
+| `apiKeyEnv` | string | `FREELLMAPI_API_KEY` | 仅 gateway：凭据**引用名**（不是密钥本身） |
+| `apiKey` | string（secret） | `''` | 仅 gateway：可选内联凭据；优先用 `apiKeyEnv` |
+| `providers` | dict 或 array | `{}` | 逐家覆盖内置池（见下） |
+| `routing` | dict | `{maxAttempts: 6, budgetMs: 45000}` | 路由引擎旋钮（见下） |
+| `logRouting` | boolean | `true` | 是否记录 direct 模式的路由决策（档位、胜出者、试了几家） |
+| `logRoutedVia` | boolean | `true` | 是否记录 `X-Routed-Via` / 回退轨迹（gateway 模式） |
+| `vision` | boolean | `true` | 所选模型支持时就声明图片输入；设 `false` 强制纯文本 |
+| `contextWindow` | number | `131072` | 池子里没描述上下文的 id 所假定的窗口 |
+| `maxTokens` | number | `0` | 向 DSH 声明的输出上限；`0` = 不声明，交给 provider |
+| `timeoutMs` | number | `600000` | 单次尝试超时（毫秒）；`0` = 不超时 |
+| `includeFusion` | boolean | `true` | gateway：是否提供网关的 `fusion` 路由 |
+| `exposeDiscoveredModels` | boolean | `true` | gateway：是否把 `GET /v1/models` 合并进选择器 |
+| `discoveryTimeoutMs` | number | `5000` | gateway：该发现请求的超时 |
+| `discoveryCacheMs` | number | `60000` | gateway：发现结果的新鲜期 |
+| `maxTokensField` | `max_tokens` \| `max_completion_tokens` | `max_tokens` | 哪个 wire 字段承载上限。`max_tokens` 是规范字段；网关也接受另一个 |
+| `headers` | map | `{}` | 附加请求头。`user-agent`、`authorization`、`content-type`、`accept` 为保留头 |
+| `taskType` | `''` \| `auto` \| `code` \| `chat` | `''` | gateway：可选的 `X-FreeLLM-Task-Type` 提示（留空则不发该头） |
+| `cacheMode` | `''` \| `on` \| `off` | `''` | gateway：可选的 `X-FreeLLM-Cache` 开关（留空则不发该头） |
 
-> 当宿主能解析到 `@deepseek-ai/schemastery` 时（DSH profile 里通常都能），设置表单由 schema 自动
-> 生成。解析不到时插件依然照常加载并按上表默认值运行，只是没有自动生成的表单，此时请改用 profile
-> patch 配置。任何非法配置值都不会导致插件加载失败。
+### `providers.<id>` —— 覆盖池中某一家
 
-### 给 `baseURL` 和密钥的三种方式
-
-**方式 1：DSH 设置页（推荐）。** 打开**设置 → 模型**（或**设置 → 插件**里本插件自己的卡片），
-填两项：
-
-- `baseURL` → `http://localhost:3001/v1`（或你的远程网关地址）；
-- 密钥 → 把 `freellmapi-…` 粘进该路由的凭据输入框。DSH 会通过凭据服务把它存在 `apiKeyEnv`
-  指定的名字下；插件**每次请求都重新解析一次**，所以轮换密钥不需要重启。
-
-**方式 2：环境变量。** `FREELLMAPI_API_KEY` 就是默认的引用名，所以这样写完全不用改配置：
-
-```bash
-# PowerShell（当前会话）
-$env:FREELLMAPI_API_KEY = "freellmapi-…"
-
-# bash / zsh
-export FREELLMAPI_API_KEY="freellmapi-…"
-
-# $DSH_HOME/.env —— DSH 会把它作为用户环境层加载，因此不必 export。
-# 请保持该文件私密（官方 setup-dsh 就是以 0600 权限写它的）。
-FREELLMAPI_API_KEY=freellmapi-…
-```
-
-如果你改了 `apiKeyEnv`，插件就按那个名字去找，找不到时仍会回落到 `FREELLMAPI_API_KEY`。端点
-本身也有自己的逃生门：
-
-```bash
-FREELLMAPI_BASE_URL=http://192.168.1.20:3001/v1
-```
-
-`FREELLMAPI_BASE_URL` **只在 `baseURL` 还是内置默认值时**才生效，所以显式配置永远优先于环境
-变量。
-
-密钥本身按下面的顺序、在**每次请求**时解析：
-
-1. DSH **凭据服务**中 `apiKeyEnv` 指定的名字（该服务自身又分层于进程环境、它管理的存储以及
-   `$DSH_HOME/.env`）；
-2. 插件自己的内联 `apiKey` 设置（如果你填了）；
-3. **进程环境**：先是 `apiKeyEnv` 指定的名字，然后是 `FREELLMAPI_API_KEY`。
-
-每一步里**空值都等于"没配"**，与变量不存在完全等价；此时插件会报 `MISSING_CREDENTIAL`，并
-告诉你它找的是哪个引用名。因为解析发生在每次请求上，轮换密钥后下一次调用即生效，不用重启。
-
-**方式 3：profile 的 patch 文件。** 不改全局设置文档，只在
-`$DSH_HOME/profiles/<profile>/cordis.patch.yml` 里覆盖插件配置：
-
-```yaml
-- id: freellmapi                 # bundle 的 patch 插入的那个 loader entry id
-  config:
-    baseURL: http://localhost:3001/v1
-    apiKeyEnv: FREELLMAPI_API_KEY
-    logRoutedVia: true
-```
-
-这是 profile 自己的 patch 层，**在所有 bundle 层之后**应用，所以它能压过 bundle 自带的默认
-值，同时完全不碰 `$DSH_HOME/settings.yaml`。
-
-> 任何时候都不要把密钥本身写进 `cordis.patch.yml`、`settings.yaml` 或任何会被提交的文件。
-> 配置里只放**引用名**（`apiKeyEnv`）。
-
-## 使用 Auto 模式
-
-1. 打开 DSH GUI 的模型选择器。
-2. 选 provider **FreeLLMAPI (Auto)**（路由 id 是 `freellmapi`）。
-3. 选模型：
-
-| 模型 id | 网关会怎么做 |
+| 键 | 含义 |
 |---|---|
-| `auto` | 按**当前激活的回退链**走，不会对全局池重新排序。 |
-| `auto:smart` | 智能优先（权重约 可靠性 0.35 / 速度 0.10 / 智能 0.55）。 |
-| `auto:fast` | 实测速度优先——吞吐加首字节时延（约 0.35 / 0.55 / 0.10）。 |
-| `auto:cheap` | 预算倾向。上游文档明确它与 `balanced` 是同一套配方（池子里本来就全免费）。 |
-| `auto:reliable` | 近期成功率优先（约 0.70 / 0.15 / 0.15）。 |
-| `auto:balanced` | 默认混合——可靠性优先，速度与智能平分其余（约 0.50 / 0.25 / 0.25）。 |
-| `auto:<profile>` | 你在 freellmapi 面板里建的**具名回退链**；模型 id 里的名字会被转成小写。 |
-| `fusion` | 网关的扇出模式（一组模型作答，judge 模型汇总）。运行中的路由器列出它时可选。 |
+| `enabled` | 打开/关闭某家。默认关闭的七家就是靠这个启用 |
+| `displayName` | 选择器与日志里的显示名 |
+| `baseURL` | 端点根地址——不用等发版就能修主机名（见 `zhipu`） |
+| `apiKeyEnv` | 你给这家起的凭据引用名 |
+| `apiKey` | 这家的内联凭据（会存进 profile patch——优先用 `apiKeyEnv`） |
+| `keyless` | 把自建端点标成"无需凭据可用" |
+| `models` | **整份替换**该家的内置模型列表。每项：`id`、`name`，以及 `capability` / `speed`（1–5）、`contextWindow`、`maxTokens`、`vision`、`toolCalling`——可以直接写在条目上，也可以放在 `caps` 里 |
 
-几个能省时间的细节：
+完全不在内置池里的 provider 同样这样加：给它 `id`/`baseURL` 和一个 `models` 列表
+（见[添加 key](#添加-key)）。
 
-- **模型字符串是原样送到网关的。** 适配器把 `auto`、`auto:smart`、`auto:<你的 profile>`、
-  `fusion` 或任意具体目录 id 一字不改地转发，并且始终请求 `stream: true`——它绝不重写、归一化
-  或省略模型名。选择器里显示什么只是方便，不是白名单：没列出来的 id 一样会被受理。
-- **选择器里 `auto` 排最前，其余在后。** 它始终提供六条虚拟路由（裸 `auto` 打头，然后文档确认
-  的五种策略），`includeFusion` 打开时再加 `fusion`，之后才是 `GET /v1/models` 报出来的内容。
-- **整个模型字符串大小写不敏感**，网关还接受常见同义词（`auto:fastest`、`auto:speed`、
-  `auto:smartest`、`auto:cheapest`、`auto:budget`）。请把上表当作"文档确认过的别名"，而不是
-  封闭枚举——本插件**不会**拒绝它不认识的策略名。
-- **未知的 `auto:<profile>` 会拿到上游 `400`。** freellmapi 在这种情况下不会静默退回
-  `auto`，本插件也不会。失败信息会明确点出这一点，去面板核对链名即可。
-- **失败是"在流里"报出来的，不是崩溃。** 传输层错误、`401`、`429`、`5xx`、流中途的
-  `stream_error` 帧、不可用的 `GenerateOptions.stop`、超时、取消，都会以一个终结性 `finish`
-  chunk 收尾（`reason.kind` 为 `error` 或 `aborted`），并带上稳定的 DSH 错误码：`AUTH`、
-  `RATE_LIMIT`、`QUOTA`、`CONTEXT_WINDOW_EXCEEDED`、`UNSUPPORTED_CONTENT`、
-  `UNSUPPORTED_OPTION`、`INVALID_REQUEST`、`SERVER`、`TRANSPORT`、`TIMEOUT`、`ABORTED`、
-  `MISSING_CREDENTIAL`、`INVALID_CREDENTIAL`、`EMPTY_RESPONSE`、`CONTENT_FILTER`、`UNKNOWN`。
-  正常结束则是 `stop`、`tool-calls` 或 `max-tokens`。遇到 `429`/`quota_exceeded` 时，只要网关给
-  了 `Retry-After`，插件还会把它解析成 DSH 的重试时间字段。
-- **有些错误码是刻意不做归一化的。** 上游带内错误帧自带 `error.code`，这个字符串会**原样**成为
-  failure code——只有当帧里完全没有 code 时才回落到 `SERVER`。所以 `stream_error` 帧最终表现为
-  `failure.code === "stream_error"`，而不是笼统的 `SERVER`。网关自造的错误码不在 DSH 的默认可重试
-  集合（`EMPTY_RESPONSE`、`RATE_LIMIT`、`SERVER`、`TIMEOUT`、`TRANSPORT`）里，因此这类失败**不会**
-  触发 DSH 重试。这是有意为之：插件如实上报网关给出的码，而不是把它"洗"成一个可重试的码，从而把
-  重试策略留在网关一侧。
-- **图片**：`vision` 打开时插件会声明支持图片输入，读取被引用的附件并以内联 `data:` URL（单个上限
-  20 MB）发出；读不到的附件会降级成一段文字占位符，而不是让请求失败。上游侧，带图片的请求只会被
-  路由到有视觉能力的模型；当前链上一个都没有时，网关返回 `422` 与 `code: "no_vision_model"`，
-  插件会告诉你遇到的是这两种情况中的哪一种。
+### `routing` —— 引擎旋钮
 
-### 怎么确认到底是哪家在服务
+| 键 | 默认值 | 含义 |
+|---|---|---|
+| `maxAttempts` | `6` | 单个请求最多试几个候选 |
+| `budgetMs` | `45000` | 故障转移总时间预算；`0` = 不限 |
+| `thresholds.medium` | `0.34` | 分数到多少就从 `simple` 变 `medium` |
+| `thresholds.complex` | `0.67` | 分数到多少就从 `medium` 变 `complex` |
+| `weights` | 逐档默认 | `{capability, speed}`，或 `{simple: {…}, medium: {…}, complex: {…}}` |
+| `preferredOrder` | `[]` | 你希望优先的 provider id；最多 0.05 的有界加分 |
 
-freellmapi 的每个响应都带 `X-Routed-Via: <platform>/<model>`。插件读取它并写进该请求的
-DSH 日志（`logRoutedVia` 打开时，默认就是开的）。日志长这样：
+### 设置它们的三种方式
+
+1. **设置页** —— **设置 → 插件 → dsh-freellmapi**（所有顶层字段；当宿主能解析到
+   `@deepseek-ai/schemastery` 时会生成表单，DSH profile 里通常都能）。
+2. **profile patch** —— `$DSH_HOME/profiles/<profile>/cordis.patch.yml`，`providers` 与 `routing`
+   推荐写在这里：
+
+   ```yaml
+   - id: freellmapi
+     config:
+       mode: direct
+       logRouting: true
+       providers:
+         cerebras:
+           enabled: true
+         kilo:
+           enabled: false        # 如果你不接受它的训练记录条款
+       routing:
+         maxAttempts: 4
+         preferredOrder: [cerebras, groq]
+   ```
+
+3. **环境变量** —— [添加 key](#添加-key) 里那些 `apiKeyEnv` 名字。
+
+## 怎么看出它做了什么
+
+**direct 模式**每个请求一行日志：
 
 ```text
-dsh-freellmapi: routed via groq/llama-3.3-70b (model=auto)
-dsh-freellmapi: routed via google/gemini-2.5-flash (model=auto:fast) fallback-attempts=2 trail=groq/… key1=rate_limited; …
+dsh-freellmapi: tier=complex -> openrouter/deepseek/deepseek-v3.1:free (capability=5, speed=3, 2 candidates tried)
+dsh-freellmapi: tier=simple -> no candidate (0 candidates tried)
 ```
 
-排查时值得记住的三点：
+**gateway 模式**保持它原来的那一行：
 
-- `X-Routed-Via` 是**唯一**可靠的"谁服务了这次请求"信号。当前正在服务的那一跳**不可能**出现
-  在 `X-Fallback-Trail` 里——响应头在响应体生成之前就已经发出去了。
-- `X-Fallback-Attempts` / `X-Fallback-Trail` 只在真的发生了跨 provider 跌落时才有；它们不出现
-  就说明"第一次就成功了"。
-- 非 ASCII 的 model id 在头里是百分号编码的，插件会先解码再记录。
-
-插件还会在进程内保留最近 50 条路由记录（以 `getRecentRoutes()` 导出，供测试与将来的界面使用）。
-它不是 DSH 工具也不是服务，日常请以日志行为准。
-
-不用 DSH 也能看到同样的信息：
-
-```bash
-curl -si http://localhost:3001/v1/chat/completions \
-  -H "Authorization: Bearer freellmapi-<unified-key>" \
-  -H "content-type: application/json" \
-  -d '{"model":"auto","messages":[{"role":"user","content":"hi"}]}' \
-  | grep -i '^x-routed-via'
+```text
+dsh-freellmapi: routed via groq/llama-3.3-70b (model=auto) fallback-attempts=2 trail=groq/… key1=rate_limited; …
 ```
+
+插件还会在进程内保留最近 50 条路由记录——以 `getRecentRoutes()` 导出（配套
+`formatDirectRouteLine()` / `formatRouteLine()`），供测试与将来的界面使用。每条记录带着档位、分数、
+最终 provider/模型、每一次尝试及其错误码、被淘汰的候选与原因，以及分类器的理由。它不是 DSH 工具也
+不是服务，所以日常请以日志行为准。
+
+## 只配一家？一家都不配？
+
+**一家都不配：** 能用，靠 `kilo` 与 `llm7`（两家都默认启用且免凭据）。这时"按复杂度选型"退化成在两
+家的模型之间挑——仍然是真实的路由、仍然能故障转移，但可选面窄得多。
+
+**只配一家：** 能用，分类器照跑——但只有一家的模型时，排序退化成了"在这家里挑最适合本档位的模型"。
+**至少两家**才有东西可"路由"。
+
+**不会发生的事：** 缺 key 永远不是错误。没有可用凭据的 provider 会被静默移出候选池——没有警告、没有
+"配置不完整"的提示。这是刻意的：在什么都没配的机器上，免凭据池必须还能工作。
 
 ## 架构
 
 ```text
-┌──────────────────── DeepSeek Harness（宿主进程） ────────────────────────────────────────┐
+┌───────────────────────────── DeepSeek Harness（宿主进程） ───────────────────────────────┐
 │                                                                                          │
 │  agent loop / 一轮对话                                                                   │
 │       │                                                                                  │
 │       ▼                                                                                  │
-│  llm service (ctx.llm)  ── 按 GenerateOptions.provider 选路由 ──▶ freellmapi             │
+│  llm service (ctx.llm)     按 GenerateOptions.provider 选路由                            │
 │       │                                                                                  │
 │       ▼                                                                                  │
-│  LlmAdapter（本插件，provider = "freellmapi"）                                           │
-│    • providerInfo()  →  { id: "freellmapi", name: "FreeLLMAPI (Auto)" }                  │
-│    • listModels()    →  GET  {baseURL}/models          （实时目录）                      │
-│    • resolveModel()  →  auto / auto:smart / auto:<profile> / fusion / <目录 id>          │
-│    • stream()        →  POST {baseURL}/chat/completions  （SSE，model 原样透传）         │
-│    • 读回            ←  X-Routed-Via、X-Fallback-Attempts / -Trail                       │
-│    • 配置与密钥      ←  设置页 · 凭据服务 · 环境变量                                     │
+│  LlmAdapter  (this plugin, provider = "freellmapi")                                      │
+│       │                                                                                  │
+│       │  模型 id 决定走哪条车道：                                                        │
+│       │    auto            → 先分类                                                      │
+│       │    auto:simple     → 强制快车道                                                  │
+│       │    auto:medium     → 强制均衡档                                                  │
+│       │    auto:complex    → 强制最强档                                                  │
+│       │    provider/model  → 钉死一个候选                                                │
+│       ▼                                                                                  │
+│  scoreComplexity()  →  simple / medium / complex  +  分数  +  理由                       │
+│       │                                                                                  │
+│       ▼                                                                                  │
+│  listProviderModels()  →  rankCandidates()                                               │
+│       │      硬门槛：视觉 · 工具 · 上下文窗口 · 冷却                                     │
+│       │      软惩罚：连续失败 · 延迟 · 偏好顺序                                          │
+│       ▼                                                                                  │
+│  dispatchWithFailover()    尝试 1 ─▶ 429 / 5xx / model_unavailable / 超时                │
+│       │                        └─▶ 停车，取下一名 ─▶ 尝试 2                              │
+│       │                                                                                  │
+│       │  ══════════════════════════════════════════════════════════════════════          │
+│       │  第一个 chunk 到达 DSH                                                           │
+│       │    越过这条线就不再换家：流中途失败以错误收尾，                                  │
+│       │    而不是把两个模型拼成一条回答                                                  │
+│       ▼                                                                                  │
+│  StreamChunk sequence → DSH                                                              │
 │                                                                                          │
-└────────────┬─────────────────────────────────────────────────────────────────────────────┘
-             │  Authorization: Bearer freellmapi-…
-             │  user-agent: deepseek-harness/<version> (+…)   ← 归因头
-             ▼
-   ┌──── freellmapi 网关 / 路由器 ────────────────────────────────────────────────────┐
-   │  http://localhost:3001/v1                                                        │
-   │  • 一把统一 key（freellmapi-…）挡在所有上游 provider 之前                        │
-   │  • bandit 打分路由：可靠性 / 速度 / 智能 三档权重                                │
-   │  • key 健康、冷却、月度预算、逐请求缓存与压缩                                    │
-   │  • 跨 provider 回退，随后是 SSE 泵：工具调用重组、                               │
-   │    usage、keep-alive 帧、错误映射                                                │
-   └───────┬───────────────┬───────────────┬───────────────┬───────────────┬──────────┘
+└──────────┬───────────────┬───────────────┬───────────────┬───────────────┬───────────────┘
            ▼               ▼               ▼               ▼               ▼
-      provider A      provider B      provider C      provider D      …（约 34 家）
-          每次请求的胜出者由响应头  X-Routed-Via: <platform>/<model>  报出
+     ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐
+     │ groq       │  │ cerebras   │  │ openrouter │  │ kilo       │  │ llm7       │
+     └────────────┘  └────────────┘  └────────────┘  └────────────┘  └────────────┘
+   kilo 与 llm7 不需要任何 key 就能答      ·      池子共 12 家
 ```
 
 接口边界上的几点：
 
-- 本插件是纯 host 侧的 DSH 插件：用 `ctx.llm.registerAdapter` 注册一条 provider 路由，把这条
-  路由登记进"可配置 provider 目录"供设置界面显示，再注册一个模型发现钩子给"添加模型"流程用。
-- **每一个**出站 HTTP 请求（聊天补全与模型发现）都带 DSH 的归因 `user-agent`，并使用
-  `redirect: 'error'`，确保凭据绝不会跟着重定向泄漏到第三方主机。
-- 插件**零运行时依赖**，且从不在模块顶层 import 任何 DSH 包：它用带保护的动态 import 解析
-  `@deepseek-ai/dsh-llm`，运行时缺席时降级到本地 shim；唯一声明的 peer
-  （`@deepseek-ai/cordis`，可选）也从未被直接 import。结果正是关键的那一条——插件永远绑定到
-  DSH 自己加载的那份运行时。相关红线见[故障排查](#故障排查)第 6 条。
-- **重试交给网关和 DSH 的默认策略。** 适配器不返回自定义重试策略：freellmapi 本身已经做了 429
-  冷却与跨 provider 故障转移，再叠一层重试只会让这种"网关更擅长处理"的情况延迟翻倍。请求带一个
-  可配置的超时（`timeoutMs`），并与调用方的 abort 信号合并。
+- **每一个**出站请求都带 DSH 的归因 `user-agent`，并使用 `redirect: 'error'`，重定向绝不可能把凭据
+  泄漏到第三方主机。
+- 凭据**逐请求解析**（每家一次查询，不是每个模型一次），且从不缓存。
+- `stream()` 永不抛错。所有失败都是带内 `finish` chunk——这正是本插件对"模块身份分裂"免疫的原因，
+  见[故障排查](#故障排查)第 6 条红线。
+- 零运行时依赖：完全没有 `dependencies`，DSH 的 LLM 运行时用带保护的动态 import 解析，解析不到时
+  降级到本地 shim。
 
 ## 故障排查
 
-### 1. `ECONNREFUSED` / 连不上 3001 端口
+### 1. `401` / `403`——某家拒绝了 key
 
-插件会把这种情况报成 `TRANSPORT` 失败，并写出它试过的确切地址：
+只影响这一家；路由器给它停车（`invalid` ⇒ 冷却 24 小时）并用下一个候选继续。检查：
+
+- key 是否以 `apiKeyEnv` 的确切名字导出（默认名见[添加 key](#添加-key)）？如果你的 shell 里已经有
+  别的命名习惯，可以逐家覆盖。
+- 这家是否还要求别的东西——注册、实名，或者特定站点（`zhipu` 是典型：国内站与海外站的 key 不互通）？
+- 空字符串等于"未配置"，所以"导出了但为空"和"没导出"表现完全一样。
+
+### 2. `429`——被限流了，接下来会怎样
+
+免费池里这是常态天气，不是故障。该候选在**第一次失败时立刻**停车，继续失败则逐级升档
+（`2 分钟 → 10 分钟 → 1 小时 → 24 小时`），provider 给了 `Retry-After` 就以它为准；本次请求则由下一名
+候选继续。缓解手段：再加一家的 key、降低并发，或用 `preferredOrder` 把流量引到还有额度的池子上。
+
+### 3. 所有候选都失败了——去哪看原因
+
+终结 chunk 会说 `ALL_CANDIDATES_FAILED`，并带上轨迹：
 
 ```text
-dsh-freellmapi: cannot reach the FreeLLMAPI gateway at http://localhost:3001/v1 — confirm the gateway is running (default http://localhost:3001/v1), that `baseURL` ends in `/v1`, and that nothing blocks the connection [model=auto] — fetch failed: connect ECONNREFUSED 127.0.0.1:3001
+dsh-freellmapi: all 3 candidate(s) failed for tier=medium after 2 attempts — groq/llama-3.3-70b-versatile: RATE_LIMIT; …
 ```
 
-- 网关真的起来了吗？`curl -s http://localhost:3001/v1/models -H "Authorization: Bearer freellmapi-<key>"`。
-- 检查 `baseURL`：它要指向 OpenAI 兼容根地址，通常以 `/v1` 结尾。只写
-  `http://localhost:3001` 会变成一片 `404`，插件对此有单独提示（"check that `baseURL` is the
-  OpenAI-compatible root and normally ends in `/v1`"）。
-- Docker：确认端口已发布（`-p 3001:3001` 或 compose 里的端口映射），容器是健康的——server
-  与 dashboard 共用 `3001`。
-- 远程网关：用它的主机名，并确认中间没有防火墙或反向代理把 `Authorization` 头吃掉。插件不会
-  偷偷换主机重试。
-- Windows + Docker Desktop / WSL：如果 `localhost` 解析到了别的网络栈，试试
-  `http://127.0.0.1:3001/v1`。
-- 网关只是慢、不是死了？调大 `timeoutMs`（默认 10 分钟）；超过它的请求会被报成 `TIMEOUT`，
-  而不是卡住不动。
+如果是 `NO_CANDIDATES`，说明在发请求之前池子就是空的：什么都没配且没有启用免凭据家，或者所有候选都
+被硬门槛挡掉（视觉 / 工具 / 上下文 / 冷却）。它的 message 里会列出申请 key 的入口。
+`STREAM_INTERRUPTED` 表示输出已经发出去了，按设计不再换家。
 
-### 2. `401` —— "Missing or invalid API key"
+### 4. 模型列表里只有 `auto` 和几个档位
 
-- 网关要的是 `Authorization: Bearer freellmapi-…`。随便哪家上游的 provider key 都不行，必须是
-  freellmapi 面板里的**统一 key**。
-- **空值等于没配。** 一个导出为空的 `FREELLMAPI_API_KEY` 与不存在的变量行为一致；插件会在发
-  请求之前就报 `MISSING_CREDENTIAL`。所以要查的是"空字符串"，不只是"变量在不在"。
-- 确认插件找的引用名（`apiKeyEnv`，默认 `FREELLMAPI_API_KEY`），并确认环境变量或凭据确实是
-  以**这个名字**存在的。
-- key 被撤销或轮换了？在设置页重新粘贴即可——插件每次请求都重新读凭据，不用重启。
+那是目录里的静态部分。`provider/model` 条目来自池子，对**已启用**的家总会列出——哪怕你没有它的 key。
+如果钉死某个 `provider/model` 后返回 `NO_CANDIDATES`，说明那家的凭据没解析到；这种沉默是刻意的
+（见[只配一家？](#只配一家一家都不配)）。
 
-### 3. `429` —— 配额或限流耗尽
+### 5. 我配好的某家被跳过了
 
-这是网关层面的状况：所选模型的**每一把**候选 key 当前都在限流或已超预算。响应体形如
-`{"error":{"message":…,"type":"invalid_request_error"}}`；如果是月度预算耗尽，网关还会额外带上
-`error.code: "quota_exceeded"` 与指向下个 UTC 月首的 `Retry-After` 头。
+缺 key ⇒ 静默移出候选池，没有警告。另外检查：
 
-- 插件会把它翻成一句点明状况、并在有该头时给出重试时间的提示——别不看就盲目重试。
-- **不要假设 `Retry-After` 一定存在。** 只有月度预算耗尽（以及一个 embedding 相关的特殊场景）
-  保证带它；普通聊天限流耗尽没有这个承诺。
-- 真正有用的处置：等窗口过去、在面板里再加一把上游 key、降低并发，或换一个能摊开负载的策略
-  （`auto:reliable` 偏向近期成功率，`auto:fast` 偏向吞吐）。
-- 注意免费版与付费版的目录差异：免费安装看到的是可能滞后约 30 天的目录快照，所以它对"哪些模型
-  可用"的认知会落后于现实。两种版本的接入方式、端点、鉴权与流式格式完全一致。
+- `enabled`——有七家是**默认关闭**的（`github`、`mistral`、`zhipu`、`volcengine`、`longcat`、
+  `nvidia`、`ovh`），要在 `providers.<id>.enabled` 里打开。
+- 硬门槛——没有 `vision: true` 的模型会被带图请求排除，`toolCalling: false` 的会被带工具请求排除，
+  `contextWindow` 小于估算 prompt 的也会被排除。
+- 冷却——刚失败过的候选正在停车；路由记录里的 `exclusions` 会明说（"cooling down for another Ns
+  after …"）。
 
-### 4. 模型列表偏少，或看不到具体模型
+### 6. profile 行为异常或起不来（依赖红线）
 
-先明确这里的"空"可能指什么：六条 `auto`/`auto:*` 虚拟路由无论发现成功与否都会提供（`fusion`
-也是如此，除非你把 `includeFusion` 关掉），所以发现失败绝不可能让选择器变成空白——丢的只是目录里的
-具体模型。
+**`@deepseek-ai/dsh-*` 绝不能出现在本插件的 `dependencies` 里。** 本包**零**运行时依赖，甚至不在模块
+顶层静态 import DSH 的 LLM 运行时：它用带保护的动态 import 解析 `@deepseek-ai/dsh-llm`，解析不到时
+降级到本地 shim。唯一声明的 peer 是可选的 `@deepseek-ai/cordis`。
 
-- 直接测发现端点：
-  `curl -s "http://localhost:3001/v1/models" -H "Authorization: Bearer freellmapi-<key>"`。
-  如果这里就是空的，问题在网关，不在 DSH。
-- `exposeDiscoveredModels` 还是 `true` 吗？把它设成 `false` 会刻意隐藏所有发现到的模型，只留
-  虚拟路由。
-- 如果发现请求缺密钥，插件会保留上次缓存并记录错误，而不是清空选择器（网关临时重启也不会让列表
-  在本次会话余下时间里变空）。先查有没有 `MISSING_CREDENTIAL`——它在发请求之前就会暴露。
-- 网关的目录同步会从 `https://api.freellmapi.co` 拉签名目录（每 12 小时一次，启动后约 10 秒首
-  跑）。没有外网的机器会保留上一份目录；而**全新安装 + 无外网**确实可能一个具体模型都没有。
-  这种时候虚拟路由仍然会被列出。
-- 用 `?available=true`（别名 `?connected=true`、`?ready=true`）或
-  `?execution_status=ready|needsKey|exhausted` 区分"目录里有"和"此刻能服务"。选择器看着很少，
-  通常就是这个原因：目录在，但 key 缺失或正在冷却。
-- 还要记得免费安装看到的是可能滞后约 30 天的目录快照，所以它的模型清单落后于上游当前提供的
-  东西是正常的。
+为什么这事重要：DSH 是通过**文件系统 junction** 提供运行时的——
+`$DSH_HOME/profiles/node_modules/<包名>` 指向 `npx` 安装缓存
+（`…\npm-cache\_npx\<hash>\node_modules\…`）。插件一旦把比如 `@deepseek-ai/dsh-llm` 声明成普通依赖，
+包管理器就会把**第二份副本**提升进 `profiles/<profile>/node_modules/@deepseek-ai/`，而它在模块解析时
+优先。类身份随之跨副本崩掉：`instanceof` 失败、错误码静默降级、服务缺失。版本区间让情况更糟——npm 上
+的 `@deepseek-ai/dsh-llm` 只有 `0.0.1-rc.x`–`0.1.x`，远低于本插件面向的 `0.2.0-rc.2` 运行时。
 
-### 5. 插件始终不出现在模型列表里
-
-按下面顺序排查：
-
-- **它被登记为 bundle 了吗？** 打开 `$DSH_HOME/profiles/<profile>/package.json`，确认
-  `dsh.profile.bundles` 里有 `dsh-freellmapi`。装了但没登记是最常见的原因；DSH 会把它当普通
-  依赖加载，界面上什么都不出现。
-- **patch 真的生效了吗？** 没有命中任何目标的 patch 只会给一条警告，所以写错名字的效果是
-  "静默地什么都没发生"。核对 loader entry id 与包名。
-- **entry id 重复了吗？** 如果 bundle 的 patch 和你的 profile patch 都 insert 了
-  `id: freellmapi`，profile 会以 `duplicate loader entry id` 起不来。删掉你手写的那行
-  （见[安装](#安装)）。
-- **路由名撞车了吗？** provider 路由名在单进程内唯一，而这里最容易踩：**官方 `setup-dsh` 用的
-  就是同一个名字。** 它写的是 `llm-pi-ai.providers.freellmapi`，在 DSH 里的 provider 名就是
-  `freellmapi`，所以如果你早先配过它，本插件的注册会被拒绝，插件拒绝加载并给出点名冲突的信息：
-
-  ```text
-  dsh-freellmapi: cannot register provider route "freellmapi" — provider route "freellmapi" is
-  already owned by another adapter. The FreeLLMAPI documentation's `npx freellmapi setup-dsh`
-  writes an `llm-pi-ai.providers.freellmapi` route; remove that route (or this plugin) so exactly
-  one adapter owns the name.
-  ```
-
-  两条路由删掉一条；它们无法共存。
-- **`llm` 服务缺了吗？** 没有它插件会保持惰性，并记录
-  `the llm service is unavailable; the plugin is inert`——那说明宿主的组合有问题，不是插件的问题。
-- **手工装完重启了吗？** 手工编辑过的 profile，bundle 组合发生在启动时。
-- 还不行就看 DSH 日志里插件自己的错误行；注册失败会被报出来，而不是被吞掉。（模型发现是唯一的
-  软失败：它的注册被拒时 provider 路由照常工作，只会给一条警告。）
-
-### 6. 整个 profile 行为异常或起不来（依赖遮蔽红线）
-
-这是唯一能把 DSH 一起拖下水的故障模式，值得弄清原理。
-
-**`@deepseek-ai/dsh-*` 绝不能出现在本插件的 `dependencies` 里。** 本包**零**运行时依赖，甚至
-不在模块顶层静态 import DSH 的 LLM 运行时：它在加载时用带保护的动态 import 解析
-`@deepseek-ai/dsh-llm`，解析不到时降级到本地的等价 shim（裸 checkout、单元测试），因此同一个
-文件在 DSH profile 里和在外面都能加载。唯一声明的 peer 是可选的 `@deepseek-ai/cordis`。
-之所以要这么讲究：
-
-- **DSH 实际是怎么提供运行时的**：`$DSH_HOME/profiles/node_modules/<包名>` 是一整片指向 `npx`
-  安装缓存（`…\npm-cache\_npx\<hash>\node_modules\…`）的文件系统 **junction**。所以
-  `@deepseek-ai/dsh-llm@0.2.0-rc.2` 是从插件自己的目录**向上**走解析到的，自然也就继承了那份缓存
-  副本的"身份"。
-- DSH 从应用包内加载自己的运行时包。插件一旦把比如 `@deepseek-ai/dsh-llm` 声明成普通依赖，包
-  管理器就会把**第二份副本**提升进 `profiles/<profile>/node_modules/@deepseek-ai/`。
-- profile 的 `node_modules` 在模块解析时优先，于是插件绑到那份副本，而 DSH 其余部分仍在用运行时
-  副本。类身份随之崩掉：跨副本的 `instanceof` 判定失败、错误码静默降级、插件期待的服务缺失。
-- 版本让情况更糟：npm 上的 `@deepseek-ai/dsh-llm` 只有 `0.0.1-rc.x` – `0.1.x`，远低于本插件
-  面向的 `0.2.0-rc.2` 运行时。也就是说那份遮蔽副本同时还是一份**不兼容**的副本。
-
-第二份副本不是假设：正因为插件与 DSH 进程可能持有**不同的模块实例**，本插件被刻意写成
-**身份无关**——不依赖任何跨副本 `instanceof`，`stream()` 永不抛错，一切失败都转成带内 `finish`
-数据，`failure` 是纯数据对象 `{message, code, status}`，而不是跨越适配器边界的异常。把运行时声明
-成依赖，等于白白丢掉这一层保护。
-
-**健康检查** —— 看两个目录就够：
+健康检查——profile **自己的** scope 里除了 `cosmokit` 与 `schemastery` 不该有别的：
 
 ```powershell
-# 1. 运行时供给：指向 npx 缓存的 junction（约 249 个包）。这是正常状态。
-Get-ChildItem "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai" |
-  Where-Object { $_.Name -eq 'dsh-llm' } | Select-Object Name, LinkType, Target
-#   Name    LinkType Target
-#   dsh-llm Junction C:\Users\…\npm-cache\_npx\<hash>\node_modules\@deepseek-ai\dsh-llm
-
-# 2. profile 自己的 scope：健康时只有 cosmokit 与 schemastery。
 Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
 ```
 
-第二个目录里多出任何东西——尤其是 `dsh-llm`、`cordis` 或任何 `dsh-*` 适配器——就是遮蔽了运行时
-的泄漏依赖。
+多出任何东西（`dsh-llm`、`cordis`、别的 `dsh-*` 适配器）都是泄漏依赖。在 profile 目录里用
+`pnpm why @deepseek-ai/dsh-llm` 找到是谁拉进来的，去掉它，重装，重启。
 
-**修法**：找出是谁把它拉进来的（在 profile 目录里 `pnpm why @deepseek-ai/dsh-llm`），去掉那条
-依赖，重装，重启 DSH。
+### 7. `400 model_unavailable` 反复出现
 
-> 准确性说明：上面那条目录清单是在真实 profile 上实测的。遮蔽安装的最终表现会随 DSH 版本不同
-> 而变化——跨副本失败、服务缺失、甚至 profile 拒绝启动都在可能范围内。所以千万不要把"它启动
-> 起来了"当成"这条依赖无害"的证据。
-
-### 7. 具名策略或具名 profile 报 `400`
-
-- `auto:<名字>` 里的名字不是你面板里的链 → 上游按设计返回 `400`。从 `GET /v1/models` 里把真实
-  名字抄下来（它们以 `auto:<小写名字>` 形式出现），原样使用。
-- `400` 也可能是请求体格式错误，或所选模型不支持的 `response_format`。能力是**逐模型**的，不是
-  逐网关的：能接受 `tools` 的模型未必遵守 `response_format`，反之亦然。
-- `409` 不是策略问题：它表示同一个 `Idempotency-Key` 被配上了**不同的**请求体。换一个新 key，
-  不要拿同一个重试。
-
-## 卸载
-
-**图形界面（推荐）**：插件管理器 → `dsh-freellmapi` → 移除。管理器会替你跑包管理器移除并更新
-`dsh.profile.bundles`。
-
-**手工**：
-
-1. 从 `$DSH_HOME/profiles/<profile>/package.json` 的 `dsh.profile.bundles` 与 `dependencies`
-   里删掉 `dsh-freellmapi`；
-2. 删除 `$DSH_HOME/profiles/<profile>/node_modules/dsh-freellmapi`；
-3. 如果你加过 `- id: freellmapi` 的覆盖块，从 profile 的 `cordis.patch.yml` 里删掉；
-4. 重新执行 `dsh plugin --profile desktop install`，重启 DSH。
-
-> ⚠️ `dsh plugin --profile desktop remove dsh-freellmapi` 这种写法看起来是 `add` 的对称形式，
-> 但**没有** DSH 运行时的原文佐证——请优先用图形界面或上面的手工步骤。
-
-卸载本插件会释放 DSH 路由名 `freellmapi`，也就是说官方 `setup-dsh` 那条路由之后可以重新装上；
-但要注意：卸载插件**不会**恢复你早先删掉的那条路由。不再需要那把 key 时，请单独从凭据存储或
-`$DSH_HOME/.env` 里删除。
-
-## 兼容性
-
-| 组件 | 支持情况 | 说明 |
-|---|---|---|
-| DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；插件只用了稳定的 LLM seam API（`registerAdapter` / `registerConfigurableProviders` / `registerModelDiscovery`）。 |
-| Node.js | `>= 22` | 与参考 DSH 插件的声明一致。 |
-| freellmapi 网关 | `v0.13.x`（撰写时最新为 `v0.13.7`） | 用到的协议面：`POST /v1/chat/completions`（SSE）、`GET /v1/models`、`X-Routed-Via` 与回退头、`429 quota_exceeded`。 |
-| freellmapi 版本档位 | 免费版与付费版 | 端点、鉴权、流式格式一致；差异只在目录新鲜度与可用模型集合。 |
-| `dsh-freellmapi` | `0.1.0` | 零运行时依赖。DSH 的 LLM 运行时在加载时解析（解析不到则用本地 shim）；唯一声明的 peer 是可选的 `@deepseek-ai/cordis`。 |
-
-> 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi`
-> 是独立编号的（例如 `0.8.1`）。不要把两个数字当成同一条版本线。
-
-## 开发
-
-```bash
-npm test          # 离线测试套件——不需要网关、不需要外网、不需要 API key
-```
-
-测试套件刻意做成密闭的：必须能在干净的 GitHub runner 上通过，所以它绝不访问真实的 freellmapi
-服务。CI 在 `ubuntu-latest` + Node 22 上跑同一条命令（`.github/workflows/ci.yml`），并注入一个
-不可达的 `FREELLMAPI_BASE_URL` 与空的 `FREELLMAPI_API_KEY`——万一有人误加了真实调用，它会
-响亮地失败，而不是悄悄通过。
-
-仓库结构：
-
-```text
-dsh-freellmapi/
-├── package.json              # dsh.bundle.patch + peerDependencies（绝不放 dependencies）
-├── cordis.patch.yml          # 本 bundle 插入的 loader 行
-├── lib/                      # 实际发布的插件代码
-├── tests/                    # 离线测试
-├── IMPLEMENTATION.md         # 实现说明与设计取舍
-├── .github/workflows/ci.yml  # Node 22，离线
-├── README.md                 # 英文（主文档）
-├── README.zh-CN.md           # 中文（本文件）
-├── CHANGELOG.md              # Keep a Changelog 格式
-└── LICENSE                   # MIT
-```
+那是聚合器的目录漂移（LLM7 会轮换模型），不是安装坏了。它与 `404 model_not_found` 同义：这个
+`(provider, model)` 组合会被**停车**（从 2 分钟那一档开始），接着由下一名候选服务本次请求。如果某个
+模型持续如此，把它从该家的 `models` 列表里删掉，或 `providers.<id>.enabled: false`。
 
 ## 限制与未验证项
 
 直说清楚，你好知道自己依赖的是什么：
 
-1. **没有对真实 freellmapi 网关跑过端到端。** 本仓库的所有测试都针对进程内的 mock 网关——这是
-   刻意的，为的是 CI 能离线跑。wire 细节来自 freellmapi 自己的文档与服务端源码，但第一次接真网关
-   时，仍可能暴露出本插件没见过的帧细节。
-2. **流中途 `stream_error` 帧只有文档级证据。** 上游没有把它的 JSON 形状钉死，所以解析器识别四种
-   可能形态（`type: "stream_error"`、`code: "stream_error"`、`object: "error"`，以及嵌套的
-   `error: {…}`），并把任何"像错误"的帧当作终结性失败处理。
-3. **图片链路没有在真实 attachments 服务上验证过。** 读取附件字节走的是
-   `attachments.imageHostPath()`——适配器能拿到字节的唯一文档化入口。如果你的构建里该服务形状不同，
-   受影响的每张图都会降级成文字占位符：请求仍然成功，但模型看不到那张图。
-4. **`GenerateOptions` 的 `sessionId` 与 `purpose` 未做映射。** Chat Completions 没有二者的标准
-   字段；目前是直接丢弃，而不是塞进自定义头。
-5. **`fusion` 的元数据帧只做到"识别并跳过"，没有渲染。** 加法式 `_fusion` 帧不会破坏流、也不会
-   混进答案，但这个纯 host 插件不会把它变成进度显示。
-6. **默认不声明输出上限**（`maxTokens: 0`），DSH 因此不会物化任何上限，交给网关与上游模型决定。
-   如果某个上游的默认值把你的长回答截断了，请显式设置 `maxTokens`。
-7. **`maxTokens` 超过 `Number.MAX_SAFE_INTEGER` 时，配置收得下、DSH 却拒收。** 该字段只校验"非负
-   数字"，而运行时要求 `defaultMaxTokens` 是**安全整数**；因此像 `1e21` 这种荒谬取值会让
-   `resolveModel()` 返回 DSH 拒收的元数据（`INVALID_MODEL_MAX_TOKENS`），而不是被静默钳制。
-8. **`role: "user"` 且 `content` 是纯字符串的消息会被发成空内容。** DSH 的契约恒为
-   `ContentBlock[]`，所以 DSH 自己构造不出这种形状；但 `lib/wire.js` 自己的 `textOf` 容忍字符串，
-   属模块内部不一致——手工构造的这类消息会带着空 `content` 抵达网关，而不是被明确拒绝。
-9. **`includeFusion: false` 可能被网关自己抵消。** 静态目录确实会去掉 `fusion`，但网关的
-   `GET /v1/models` 响应会自报 `fusion`，模型发现又把它合并回来。真想让它消失，请同时关掉
-   `exposeDiscoveredModels`。
-10. **模型发现可能返回重复 id。** `discover()` 原样透传网关的清单；DSH 自己的 `discoverModels`
-    会按 endpoint 顺序去重，所以对 GUI 无害——但直接读取原始发现结果的调用方会看到重复项。
+1. **复杂度分类器是启发式，不是理解。** 它数 token、围栏代码、工具 schema 和词。
+   [它什么时候会判错](#它什么时候会判错以及你怎么覆盖)里给了本实现的三个真实误判。你更清楚时，直接钉
+   `auto:simple` / `auto:medium` / `auto:complex`，或钉一个 `provider/model`。
+2. **没有对真实 provider 跑过端到端。** 本仓库所有测试都跑在进程内的 mock provider 上——这是刻意的，
+   为的是 CI 离线可跑。真正发出的外部请求只有维护者那次免凭据探针（5 个请求，4 个 200，1 个 404，
+   记录在 `_lead/live-probe-2026-10-13.md`）。其余一切——每一家有 key 的 provider、每一个额度数字、
+   除免凭据家之外的每一个模型 id——都是**文档级证据**，不是实测。
+3. **只有免凭据那几家被真正测过。** `groq`、`cerebras`、`openrouter`、`github`、`mistral`、`nvidia`
+   等等从未被访问（没有 key），它们的 `baseURL` 与模型 id 来自上游 registry 与迁移脚本。限流数字是
+   2026-04 的基线，会漂移。
+4. **`zhipu` 是池子里风险最高的一项**，`volcengine` / `longcat` 的模型 id 是推断的——这三家都以
+   `confidence: 'speculative'` **默认关闭**。启用它们等于你接受该风险。`zhipu` 的主机名在国内站与
+   海外站不同且 key 不互通：选错主机名必然 401。
+5. **免费目录会漂移。** 同一个模型 id 今天 200、明天可能就 `400 model_unavailable`。路由器把它当作
+   逐模型状态处理（停车 + 换下一名），所以是降级而不是失败——但这是正常现象，不是 bug。
+6. **`stream_error` 帧的形状只有文档级证据。** 上游没有钉死它的 JSON 形状，所以解析器识别四种可能
+   形态（`type`、`code`、`object`、嵌套 `error`），并把任何"像错误"的帧当作终结性失败。
+7. **图片链路没有在真实 attachments 服务上验证过。** 字节读取走 `attachments.imageHostPath()`——适配器
+   能拿到字节的唯一文档化入口；如果你的构建里该服务形状不同，受影响的每张图都会降级成占位文本，请求
+   仍然成功。默认池里只有两个模型声明 `vision: true`。
+8. **`GenerateOptions` 的 `sessionId` / `purpose` 未做映射**——Chat Completions 没有二者的标准字段。
+9. **健康状态不持久化。** 冷却只活在进程内；重启后被停车的 provider 会被重试一次。`HealthTracker` 能
+   往返序列化自己的状态，但没有任何代码把它写进磁盘。
+10. **故障转移后的答案来自另一个模型。** 第 1 名失败时由第 2 名作答，而它们是不同的模型。这很安全
+    （此时什么都没发出去），并且完整记录在路由记录的 `attempts` 里，但答案不是排名最高那个模型给的。
+11. **`nvidia` 的 `parallel_tool_calls: false` 要求"声明了但没生效"。** 池条目里带着它，但请求体从来
+    没收到过（这份声明在到达 wire 之前就丢了）。NVIDIA 默认关闭，所以不会影响默认安装；要开就请预期
+    可能遇到并行工具调用被拒。
+12. **`routing.weights` / `routing.thresholds` 是高级字段**，设置页里没有渲染表单（它们是 `z.any()`
+    载荷）。请在 profile patch 里改。
+13. **v0.1.0 那轮验证遗留项的现状**（已按本实现重新核实）：`maxTokens` 超过
+    `Number.MAX_SAFE_INTEGER` 时，`resolveModel()` 仍会返回 DSH 拒收的元数据
+    （`INVALID_MODEL_MAX_TOKENS`）；`role: "user"` 且 `content` 为纯字符串的消息仍会被发成空内容；
+    gateway 模式下 `includeFusion: false` 仍可能被网关自报的 `fusion` 抵消；`discover()` 仍可能返回重复
+    id（DSH 会去重）。`L1`——失败码清单不全——已修。
 
-## 本文所述内容的核实方式
+## 兼容性
 
-为了让你能分清哪些是实测事实、哪些是设计判断：
+| 组件 | 支持情况 | 说明 |
+|---|---|---|
+| DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
+| Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
+| Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
+| `dsh-freellmapi` | `0.2.0` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；唯一 peer 是可选的 `@deepseek-ai/cordis` |
+| freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
-- **实测 / 来自上游**：网关的安装命令与端点、`setup-dsh` 写了哪些文件、`auto:*` 策略与权重表、
-  `X-Routed-Via` 与回退头、`400` / `401` / `409` / `422` / `429` / `502` 的语义、免费版与付费版
-  的目录差异，以及"约 34 家 provider"这个数字，都来自 freellmapi 自己的文档与源码
-  （`docs/en/api/01-rest-api.md`、`docs/en/architecture/*`、`cli/src/tools.ts`、
-  `server/src/routes/proxy.ts`）。
-- **实测 / DSH 侧**：profile → bundle → loader 的组合模型、patch 格式、`dsh.bundle.patch` 的
-  必要性、settings / credentials / volatile 语义、GUI 选中模型依赖 `listModels` 这一要求，以及
-  依赖遮蔽的健康检查，均取自 DSH `0.2.0-rc.2` 的运行时源码。插件管理器的行为（接受哪些 spec、
-  拒绝没有 `dsh.bundle` 的 manifest）读自 `@deepseek-ai/dsh-plugin-manager`。
-- **实测 / 本插件**：[配置](#配置)一节里每个字段、默认值与探测行为都读自 `lib/config.js`；日志
-  行格式、`X-Routed-Via`/回退头的处理与环形缓冲读自 `lib/routes.js`；失败码与 `Retry-After` 解析
-  读自 `lib/errors.js`；请求映射与"失败在流内上报"的行为读自 `lib/wire.js` 与 `lib/index.js`。
-  将来若有字段改名，那属于破坏性变更，会写进 [CHANGELOG.md](CHANGELOG.md)。
-- **属于设计判断，而非实测**："DSH 通用的 pi-ai `openai-completions` 路径不会把上游响应头透到
-  日志里"——这是根据该适配器的实现方式推断的，也正是增量第 1 条存在的理由。请把它当作一个值得
-  在你机器上验证的说法。
-- **未验证的命令**都用 ⚠️ 就地标出，并附上它的证据来源。
+> 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立
+> 编号的（例如 `0.8.1`）。不要把两个数字当成同一条版本线。
+
+## 开发
+
+```bash
+npm test          # 离线测试套件——不需要外网、不需要真实 provider、不需要 API key
+```
+
+测试套件刻意做成密闭的：必须能在干净的 GitHub runner 上通过，所以它绝不访问真实的 provider。CI 在
+`ubuntu-latest` + Node 22 上跑同一条命令（`.github/workflows/ci.yml`）。
+
+```text
+dsh-freellmapi/
+├── lib/
+│   ├── index.js        # 插件入口：apply()、适配器、listModels/resolveModel/stream
+│   ├── config.js       # 配置 schema 与全量归一化（DEFAULTS 是权威）
+│   ├── providers.js    # 内置池 + 逐家覆盖 + 凭据解析
+│   ├── complexity.js   # 分类器：信号、权重、阈值
+│   ├── router.js       # 纯函数候选排序（门槛、健康度、延迟、偏好顺序）
+│   ├── health.js       # 冷却、失败计数、延迟 EWMA
+│   ├── dispatch.js     # 单家尝试 + 故障转移循环
+│   ├── wire.js         # GenerateOptions → OpenAI 兼容请求
+│   ├── sse.js / frames.js / translate.js   # SSE → DSH StreamChunk
+│   ├── errors.js / routes.js / catalog.js / runtime.js / types.js
+├── tests/              # 离线测试（314 个）
+├── IMPLEMENTATION.md   # 设计说明，含每一处刻意偏离
+├── README.md / README.zh-CN.md / CHANGELOG.md / LICENSE
+└── .github/workflows/ci.yml
+```
 
 ## 许可证
 
 [MIT](LICENSE) © 2026 lion231226
 
-本项目与 freellmapi 项目、与 DeepSeek 均无隶属关系，也未获其背书或支持。"freellmapi" 归其
-作者所有；"DeepSeek Harness" 与 `@deepseek-ai/*` 归 DeepSeek 所有。使用风险自负——被 Auto
-路由到的每一次请求，都会消耗路由器所选那家上游 provider 的额度。
+与池中任何 provider、与 freellmapi 项目、与 DeepSeek 均无隶属关系，也未获其背书或支持。各 provider
+名称归其所有者；"DeepSeek Harness" 与 `@deepseek-ai/*` 归 DeepSeek。免费档有自己的额度、条款与隐私
+政策，遵守它们是你的责任——其中几家会记录甚至训练你发送的内容。

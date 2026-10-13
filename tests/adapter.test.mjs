@@ -18,7 +18,7 @@ const TEST_KEY = 'freellmapi-test-key-not-a-real-credential'
 /** Mount the plugin with a config pointing at a mock gateway. */
 function mount(baseURL, config = {}, services = {}) {
   return mountPlugin({
-    config: { baseURL, apiKey: TEST_KEY, ...config },
+    config: { mode: 'gateway', baseURL, apiKey: TEST_KEY, ...config },
     services,
   })
 }
@@ -34,7 +34,7 @@ function request(model, extra = {}) {
 }
 
 test('registration mounts one route, one directory entry and one discovery offer', () => {
-  const mounted = mountPlugin({ config: { apiKey: TEST_KEY } })
+  const mounted = mountPlugin({ config: { mode: 'gateway', apiKey: TEST_KEY } })
   assert.equal(mounted.adapterCount, 1)
   assert.deepEqual(mounted.directoryEntries, [{
     provider: 'freellmapi',
@@ -48,18 +48,18 @@ test('registration mounts one route, one directory entry and one discovery offer
 })
 
 test('provider metadata preserves the route id', () => {
-  const { adapter } = mountPlugin({ config: { apiKey: TEST_KEY } })
+  const { adapter } = mountPlugin({ config: { mode: 'gateway', apiKey: TEST_KEY } })
   assert.deepEqual(adapter.providerInfo('freellmapi'), { id: 'freellmapi', name: 'FreeLLMAPI (Auto)' })
 })
 
 test('providerRetryPolicy returns undefined so the runtime default applies', () => {
-  const { adapter } = mountPlugin({ config: { apiKey: TEST_KEY } })
+  const { adapter } = mountPlugin({ config: { mode: 'gateway', apiKey: TEST_KEY } })
   assert.equal(adapter.providerRetryPolicy('freellmapi'), undefined)
 })
 
 test('a route conflict is reported with actionable advice', () => {
   assert.throws(
-    () => mountPlugin({ config: { apiKey: TEST_KEY }, failAdapterRegistration: true }),
+    () => mountPlugin({ config: { mode: 'gateway', apiKey: TEST_KEY }, failAdapterRegistration: true }),
     (error) => {
       assert.equal(error.code, 'DUPLICATE_ADAPTER')
       assert.match(error.message, /setup-dsh/)
@@ -114,7 +114,7 @@ test('listModels omits discovered models when the switch is off', async () => {
 })
 
 test('resolveModel returns matching identity for listed and unlisted ids', async () => {
-  const { adapter } = mountPlugin({ config: { apiKey: TEST_KEY } })
+  const { adapter } = mountPlugin({ config: { mode: 'gateway', apiKey: TEST_KEY } })
   for (const model of ['auto', 'auto:fast', 'auto:my-own-profile', 'gemini-2.5-flash']) {
     const info = await adapter.resolveModel('freellmapi', model)
     assert.equal(info.provider, 'freellmapi')
@@ -510,7 +510,7 @@ test('an unusable credential is refused as INVALID_CREDENTIAL, not sent', async 
     // to build the header at all, so it must be refused locally with a
     // diagnosis instead of surfacing as an opaque 401.
     const { adapter } = mountPlugin({
-      config: { baseURL: server.baseURL, apiKey: 'freellmapi-\u4e2d\u6587-key' },
+      config: { mode: 'gateway', baseURL: server.baseURL, apiKey: 'freellmapi-\u4e2d\u6587-key' },
     })
     const { finish } = assertValidChunkSequence(await collect(adapter.stream(request('auto'))))
     assert.equal(finish.kind, 'error')
@@ -605,7 +605,7 @@ test('live settings edits take effect without re-registering', async () => {
     writeSse(response, [chunk('two'), { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }, '[DONE]'])
   })
   try {
-    const live = liveConfig({ baseURL: first.baseURL, apiKey: TEST_KEY, logRoutedVia: true })
+    const live = liveConfig({ mode: 'gateway', baseURL: first.baseURL, apiKey: TEST_KEY, logRoutedVia: true })
     const mounted = mountPlugin({ config: live.container })
     const before = assertValidChunkSequence(await collect(mounted.adapter.stream(request('auto'))))
     assert.deepEqual(before.blocks, [{ type: 'text', text: 'one' }])
@@ -628,7 +628,7 @@ test('prepareCall pins a configuration snapshot for the whole generation', async
     writeSse(response, [chunk('snapshot-2'), { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }, '[DONE]'])
   })
   try {
-    const live = liveConfig({ baseURL: first.baseURL, apiKey: TEST_KEY })
+    const live = liveConfig({ mode: 'gateway', baseURL: first.baseURL, apiKey: TEST_KEY })
     const mounted = mountPlugin({ config: live.container })
     const prepared = await mounted.adapter.prepareCall('freellmapi', 'auto')
     assert.equal(prepared.model.id, 'auto')

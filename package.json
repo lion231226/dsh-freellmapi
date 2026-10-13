@@ -1,7 +1,7 @@
 {
   "name": "dsh-freellmapi",
-  "version": "0.1.0",
-  "description": "FreeLLMAPI (Auto) provider route for DeepSeek Harness: one `auto` model that lets a local FreeLLMAPI gateway pick the best free model and fail over automatically, streamed back as native DSH chunks.",
+  "version": "0.2.0",
+  "description": "Self-contained free-tier LLM routing for DeepSeek Harness: one `auto` model that scores each request's complexity and picks the best of 12 free providers, failing over automatically. No external process; works with zero credentials out of the box.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

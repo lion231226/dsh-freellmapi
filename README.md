@@ -1,882 +1,723 @@
 # dsh-freellmapi
 
-**Use [freellmapi](https://github.com/tashfeenahmed/freellmapi)'s Auto routing from inside
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).**
-
-`dsh-freellmapi` is a DSH LLM adapter plugin. It registers your local freellmapi gateway as
-the DSH provider route `freellmapi`, exposes the router's `auto` / `auto:<strategy>` models in
-the DSH model picker, reports which upstream provider actually answered each request, and
-keeps the model list in sync with the running router.
+**Free-tier multi-provider routing for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).**
+A dozen free provider pools behind one DSH provider route, with a per-request complexity classifier,
+capability/speed ranking, and automatic 429/5xx failover.
 
 ```text
-DSH  ──▶  provider "freellmapi"  ──▶  POST http://localhost:3001/v1/chat/completions
-                                        { "model": "auto", "stream": true }
-                                      ──▶  freellmapi router  ──▶  ~34 providers
+install the plugin  →  start DSH  →  pick provider "freellmapi" + model "auto"  →  it answers
 ```
+
+No external process. No gateway to run. No API key required to get a first answer — the built-in pool
+contains keyless providers that the maintainer verified with real, credential-free requests.
 
 > ### Unofficial plugin — please read
 >
-> This is a community project. It is **not** affiliated with, endorsed by, sponsored by or
-> supported by the freellmapi project, nor by DeepSeek. It is not an official freellmapi
-> client and not an official DSH plugin. "freellmapi" and "DeepSeek Harness" belong to their
-> respective owners. Licensed under the [MIT License](LICENSE).
-
-> ### Do you actually need this plugin?
->
-> **If all you want is Auto mode, you probably do not.**
-> freellmapi ships an official, zero-plugin DSH integration:
->
-> ```bash
-> npx freellmapi setup-dsh --url http://localhost:3001 --api-key <unified-key>
-> ```
->
-> It writes the gateway into `$DSH_HOME/settings.yaml` as a `llm-pi-ai` route, drops the key
-> into `$DSH_HOME/.env` (mode `0600`), and sets the default model — no plugin involved.
-> Because it builds its model list from the live `GET /v1/models` response, the official path
-> **already lets you pick `auto`, `fusion` and `auto:<profile>` in the DSH model picker.** This
-> plugin is an *optional alternative / enhancement*, not a requirement. Read
-> [Relationship to the official `setup-dsh`](#relationship-to-the-official-setup-dsh) and
-> decide for yourself.
->
-> **One hard constraint:** both paths register the same DSH provider route name
-> (`freellmapi`), so they cannot both be enabled. If you already ran `setup-dsh`, remove its
-> `freellmapi` route first — or don't install this plugin.
+> This is a community project. It is **not** affiliated with, endorsed by, sponsored by or supported by
+> any of the upstream providers it talks to, nor by DeepSeek. It is not an official DSH plugin.
+> Provider names and "DeepSeek Harness" / `@deepseek-ai/*` belong to their respective owners.
+> Licensed under the [MIT License](LICENSE). **You are responsible for complying with each provider's
+> terms of service, and for what you send to a free tier that may log and train on it.**
 
 ---
 
 ## Table of contents
 
-- [What this plugin adds](#what-this-plugin-adds)
-- [Relationship to the official `setup-dsh`](#relationship-to-the-official-setup-dsh)
-- [Requirements](#requirements)
-- [Install](#install)
+- [Quick start](#quick-start)
+- [What you get](#what-you-get)
+- [Zero config: what works with no key at all](#zero-config-what-works-with-no-key-at-all)
+- [Adding keys](#adding-keys)
+- [How it picks a model](#how-it-picks-a-model)
+- [Failover and health](#failover-and-health)
+- [Two modes: `direct` and `gateway`](#two-modes-direct-and-gateway)
 - [Configuration](#configuration)
-- [Using Auto mode](#using-auto-mode)
+- [How to see what it did](#how-to-see-what-it-did)
+- [Just one key? No keys?](#just-one-key-no-keys)
 - [Architecture](#architecture)
 - [Troubleshooting](#troubleshooting)
-- [Uninstall](#uninstall)
+- [Limitations and unverified claims](#limitations-and-unverified-claims)
 - [Compatibility](#compatibility)
 - [Development](#development)
-- [Limitations and unverified claims](#limitations-and-unverified-claims)
-- [How the claims in this README were verified](#how-the-claims-in-this-readme-were-verified)
 - [License](#license)
 
-## What this plugin adds
+## Quick start
 
-Four things, and nothing more. All four are about *observability and ergonomics*, not about
-being able to reach the gateway at all — the official configuration path already does that.
-
-| # | Increment | Why it matters |
-|---|---|---|
-| 1 | **`X-Routed-Via` is visible.** Every freellmapi response carries `X-Routed-Via: <platform>/<model>` — the one header that tells you which upstream provider and model actually served the request. This plugin reads it and reports it in the DSH log (behind a config switch). The generic `openai-completions` path in DSH's pi-ai adapter does not surface upstream response headers, so on that path "who answered?" stays invisible. **This is a design-based judgement about the adapter, not a measured claim about pi-ai internals.** | With Auto mode, the router picks for you; knowing the pick is the whole point. |
-| 2 | **Gateway-specific errors become actionable messages.** An unknown `auto:<profile>` name is an upstream `400`; exhausted quota / rate limits are an upstream `429` (with `Retry-After` and `error.code: "quota_exceeded"` when it is a *monthly budget* exhaustion). The plugin translates these into messages that say what to do next, instead of a raw `HTTP 429` shell. | You find out "add a key / wait until the next UTC month / fix the profile name" instead of guessing. |
-| 3 | **It does not touch your global DSH configuration.** `baseURL`, the credential reference and every other knob live in the plugin's own config; nothing is written to `$DSH_HOME/settings.yaml` or `$DSH_HOME/.env`. | Your gateway settings stay where you can inspect them, and a later `setup-dsh` cannot silently rewrite this plugin's endpoint. The trade-off is real though — see the next section: both paths claim the same DSH route name, so **only one of them can be active**. |
-| 4 | **The model list is refreshed at runtime.** Models come from the running router's `GET /v1/models`; when you connect a new provider in the freellmapi dashboard, it appears in DSH without re-running a CLI. | No stale snapshot to re-generate after every gateway change. |
-
-What it deliberately does **not** do: it does not talk to upstream providers directly, does
-not replace the router, does not manage your freellmapi keys, and does not make Auto mode
-possible (the gateway and the official integration already do that).
-
-## Relationship to the official `setup-dsh`
-
-freellmapi documents a first-class DSH integration that requires **no plugin at all**:
-
-```bash
-# 1. Make sure the gateway is running (see Requirements), then:
-npx freellmapi setup-dsh --url http://localhost:3001 --api-key <unified-key>
-
-# 2. Start DSH as usual:
-npx @deepseek-ai/dsh web
-```
-
-What that command writes into `$DSH_HOME` (default `~/.dsh`):
-
-```yaml
-# $DSH_HOME/settings.yaml
-llm-pi-ai:
-  providers:
-    freellmapi:
-      displayName: FreeLLMAPI
-      apiKeyEnv: FREELLMAPI_API_KEY      # the key itself lives in $DSH_HOME/.env (0600)
-      api: openai-completions            # reuses the pi-ai adapter DSH already ships
-      baseURL: http://localhost:3001/v1
-      models:                            # taken from the live GET /v1/models catalog
-        - { id: auto, name: Auto (router picks the best available model), contextWindow: … }
-        - { id: auto:smart, name: …, contextWindow: … }
-        # … plus every concrete catalog model
-agent-default-model:
-  provider: freellmapi
-  model: auto
-```
-
-```dotenv
-# $DSH_HOME/.env   (mode 0600)
-FREELLMAPI_API_KEY=freellmapi-…
-```
-
-Three consequences worth stating plainly:
-
-1. **Auto mode works on the official path.** `GET /v1/models` explicitly lists `auto`,
-   `fusion` and one `auto:<profile>` row per named fallback chain, so `setup-dsh` writes them
-   into `models:` and DSH's picker offers them. Selecting `auto` does not require this plugin.
-2. **The official path is the safer default.** It is maintained upstream, it is one command,
-   and it uses a DSH-shipped adapter instead of third-party code.
-3. **The two paths are mutually exclusive.** The official route is
-   `llm-pi-ai.providers.freellmapi`, whose DSH provider name is `freellmapi`; this plugin also
-   registers the provider route `freellmapi`. Provider route names are unique inside a DSH
-   process, so the adapter that registers second is rejected. If you already ran `setup-dsh`,
-   remove its `freellmapi` route before installing this plugin — or keep the official route and
-   skip this plugin. You will not be left guessing if you get it wrong: the plugin refuses to
-   load with a message that names exactly this conflict.
-
-So when is this plugin worth installing?
-
-| | Official `setup-dsh` | This plugin |
-|---|---|---|
-| Auto / `auto:<strategy>` / `auto:<profile>` selectable in DSH | ✅ yes | ✅ yes |
-| Model list source | `GET /v1/models` at setup time | `GET /v1/models` at runtime, refreshable |
-| Who served the request (`X-Routed-Via`) | ❌ not surfaced | ✅ reported in the DSH log (config switch) |
-| freellmapi-specific `400` / `429` messaging | generic adapter error | ✅ translated |
-| Gateway error / fallback trail visibility | ❌ | ✅ logged when present |
-| Writes to `$DSH_HOME/settings.yaml` / `.env` | ✅ yes (structurally merged, with a timestamped backup) | ❌ no — config stays in the plugin |
-| Can be enabled at the same time as the other | ❌ | ❌ — both own the DSH provider route `freellmapi`; pick exactly one |
-| Extra code in your profile | none | one third-party bundle |
-| Upstream maintenance | freellmapi project | this repository |
-
-**Honest conclusion: this plugin is an optional alternative/enhancement to the official path,
-not a required piece.** If you want the smallest, most upstream-supported setup, use
-`setup-dsh`. If you specifically want routed-via visibility and gateway-aware error messages,
-this plugin adds exactly that.
-
-## Requirements
-
-| Requirement | Detail |
-|---|---|
-| **A running freellmapi gateway** | Reachable at `http://localhost:3001` by default. Both the OpenAI-compatible base URL `http://localhost:3001/v1` and the dashboard live on that port. |
-| **A unified API key** | Shaped like `freellmapi-…`, created in the gateway dashboard's **Keys** page. This is a single gateway key — it is *not* your upstream provider keys. |
-| **DeepSeek Harness** | Runtime `0.2.0-rc.2` is what this plugin was written against (see [Compatibility](#compatibility)). |
-| **Node.js** | `>= 22` (the same range the DSH runtime and the reference DSH plugins declare). |
-
-### Starting the gateway
-
-The upstream repository is the authority here; the two supported shapes are:
-
-```bash
-# Recommended by upstream: clone the repository, then bring up the bundled compose file.
-git clone https://github.com/tashfeenahmed/freellmapi.git
-cd freellmapi
-docker compose up -d
-# image: ghcr.io/tashfeenahmed/freellmapi:latest (multi-arch: amd64 + arm64)
-
-# Or run the server directly from a checkout (server + dashboard share :3001):
-npm run build && node server/dist/index.js
-```
-
-There is also a desktop build under `desktop/` in the upstream repository, and a native
-`agent-clients` documentation page describing this integration.
-
-### Checking the gateway before you install anything
-
-```bash
-curl -s http://localhost:3001/v1/models \
-  -H "Authorization: Bearer freellmapi-<unified-key>" | head -c 400
-```
-
-You should get an OpenAI-shaped `{"object":"list","data":[…]}` body whose first entries include
-`auto` and `fusion`. If that curl fails, stop here — the plugin cannot fix a gateway that is
-not answering.
-
-Useful variant — list only what can serve right now:
-
-```bash
-curl -s "http://localhost:3001/v1/models?available=true" \
-  -H "Authorization: Bearer freellmapi-<unified-key>"
-```
-
-## Install
-
-There are three supported ways in. Pick one — do **not** combine methods A/B with method C's
-patch row, for the reason explained at the end of this section.
-
-### Method A — DSH plugin manager (GUI)
-
-1. Open the DSH web GUI.
-2. Go to the **Plugins** manager in the sidebar (the plugin inventory page).
-3. Use its **install / add** action and paste one of these specs:
-   - `dsh-freellmapi` — the registry spec, once the package is published to npm.
-   - `github:lion231226/dsh-freellmapi` — straight from GitHub, works without npm publishing.
-   - `github:lion231226/dsh-freellmapi#v0.1.0` — pinned to a tag or commit.
-4. Confirm. The manager runs the profile's package manager for you, registers the package as a
-   profile bundle, and (if DSH asks) restart the app.
-
-The manager accepts registry names, absolute local paths, git addresses and tarball URLs, and
-it **refuses any spec whose manifest declares no `dsh.bundle`** — this package declares one, so
-it installs as a real profile bundle rather than as a dead dependency.
-
-### Method B — the `dsh plugin` CLI
-
-```bash
-# GitHub spec
-dsh plugin --profile desktop add github:lion231226/dsh-freellmapi
-
-# npm spec, once published
-dsh plugin --profile desktop add dsh-freellmapi
-
-# install everything the profile already declares (after editing package.json by hand)
-dsh plugin --profile desktop install
-```
-
-`add` and `install` are the CLI forms the DSH runtime itself prints in its error messages
-(`run 'dsh plugin --profile <name> install' if its dependency is not installed`,
-`create it with 'dsh plugin --profile <name> add <package>'`). Replace `desktop` with your
-profile name; it is the directory name under `$DSH_HOME/profiles/`.
-
-> ⚠️ **Not verified end-to-end in this repository.** The subcommand names come from DSH's own
-> runtime text, not from a run against a real profile. Confirm the exact surface with your DSH
-> version before scripting it, and prefer Method A if you are unsure.
-
-A hand-written package-manager call is *not* a substitute for `dsh plugin add`: running
-`pnpm add` (or `npm install`) in the profile directory installs the package but does not
-register it as a profile bundle, so DSH will load it as a plain dependency and nothing appears
-in the model list. If you insist on doing it by hand, complete Method C as well.
-
-### Method C — manual placement
-
-Useful for air-gapped machines, for a local checkout you are hacking on, or when you want to
-see exactly what changed.
-
-1. Put the built package at:
+1. **Install** — open the DSH web GUI, go to the **Plugins** manager in the sidebar, install the bundle
+   and paste one of these specs:
 
    ```text
-   $DSH_HOME/profiles/<profile>/node_modules/dsh-freellmapi/
+   github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
+   github:lion231226/dsh-freellmapi#v0.2.0   # pinned to a tag
+   dsh-freellmapi                            # from npm, once published
    ```
 
-   (A local checkout can be linked instead of copied — the reference DSH plugins use
-   `"file:node_modules/<pkg>"` for exactly this.)
+   CLI equivalent, and the manual path, are in [Install details](#install-details).
 
-2. Register it in `$DSH_HOME/profiles/<profile>/package.json` — **both** places matter:
+2. **(Optional) paste a few keys** — see [Adding keys](#adding-keys). Skipping this step is a supported
+   configuration: the two keyless providers still answer.
 
-   ```jsonc
-   {
-     "dependencies": {
-       "dsh-freellmapi": "file:node_modules/dsh-freellmapi"
-     },
-     "dsh": {
-       "profile": {
-         "bundles": [
-           "@deepseek-ai/dsh-base",
-           "@deepseek-ai/dsh-web-app",
-           "dsh-freellmapi"            // ← without this line the package is never loaded
-         ]
-       }
-     }
-   }
+3. **Pick the model** — in the DSH model picker choose provider **FreeLLMAPI (Auto)** and model `auto`.
+
+4. **Watch it work** — with `logRouting` on (the default) every request logs one line:
+
+   ```text
+   dsh-freellmapi: tier=complex -> openrouter/deepseek/deepseek-v3.1:free (capability=5, speed=3, 2 candidates tried)
    ```
 
-3. Materialise the dependency, then restart DSH:
+That is the whole setup. Everything below is detail.
 
-   ```bash
-   dsh plugin --profile desktop install
-   ```
+### Install details
 
-Why both: `dsh.profile.bundles` is what the runtime walks when it composes the loader tree,
-while `dependencies` is what makes the package resolvable at all. A package that is installed
-but missing from `bundles` is silently ignored; a package that is listed but not installed
-makes startup complain that the bundle cannot be resolved.
+| Method | How |
+|---|---|
+| **Plugins manager (recommended)** | Sidebar → **Plugins** → install → paste `github:lion231226/dsh-freellmapi` (or the npm name once published), confirm, restart if DSH asks. The manager accepts registry names, absolute paths, git addresses and tarball URLs, and refuses any spec whose manifest declares no `dsh.bundle` — this package declares one. |
+| **`dsh plugin` CLI** | `dsh plugin --profile desktop add github:lion231226/dsh-freellmapi` — the subcommands come from DSH's own runtime error text; ⚠️ not verified end-to-end here, so confirm against your DSH build. |
+| **Manual placement** | Copy the package to `$DSH_HOME/profiles/<profile>/node_modules/dsh-freellmapi/`, add it to **both** `dependencies` and `dsh.profile.bundles` in the profile's `package.json`, then run `dsh plugin --profile <profile> install` and restart. Listing it in `bundles` is what makes DSH load it at all. |
 
-**The package's own patch file** (shipped inside the plugin, not written by you) is a
-top-level YAML array and is the reason a correctly installed bundle needs no manual patch row:
+The package ships its own `cordis.patch.yml` (`- insert: [{ id: freellmapi, name: 'dsh-freellmapi' }]`),
+so a correctly installed bundle needs no hand-written patch row. **Never add a second row with the same
+`id`** in the profile's own `cordis.patch.yml`: two entries with one id abort bundle composition with
+`duplicate loader entry id "freellmapi"`.
+
+## What you get
+
+| | |
+|---|---|
+| **Self-contained routing** | The plugin owns the routing intelligence. `direct` mode (the default) needs no gateway, no daemon, no Docker — nothing but DSH itself. |
+| **A built-in pool of 12 providers / 30 models** | Groq, Cerebras, OpenRouter, GitHub Models, Mistral, Z.ai (Zhipu), Volcengine Ark, LongCat, LLM7, Kilo, NVIDIA NIM and OVH AI Endpoints — with per-model capability, speed, context window, vision and tool-calling facts. |
+| **Per-request complexity routing** | Every request is scored and classified `simple` / `medium` / `complex`; the tier decides whether capability or speed dominates the ranking. A one-line "list the files here" and a 12-tool refactoring task do not go to the same model. |
+| **Automatic failover** | A rate-limited (429), broken (5xx), timed-out or `model_unavailable` candidate is parked and the next-ranked one is tried — **only before the first chunk has been sent**, so a single answer is never spliced from two models. |
+| **Health tracking and cooldowns** | The **first retryable failure already parks** the candidate (2 minutes), and each further consecutive failure escalates one step: 2 m → 10 m → 1 h → 24 h. `Retry-After` from the provider always wins; a rejected credential (401/403) parks that provider for 24 h. The scoring penalty decays with a 60-second half-life, so a single 429 is never a life sentence. |
+| **Zero-config start** | Kilo and LLM7 answer without any credential; a fresh install has a non-empty candidate pool before you configure anything. |
+| **Honest diagnostics** | One log line per request names the tier, the winner and how many candidates were tried; every failure is an in-band `finish` chunk with a stable code, never an exception. |
+| **`gateway` mode kept intact** | The v0.1.0 behaviour — forwarding to an external [freellmapi](https://github.com/tashfeenahmed/freellmapi) gateway — is still there behind `mode: gateway`, unchanged, for people who want the gateway's own bandit scoring, caching and `fusion`. |
+
+## Zero config: what works with no key at all
+
+The pool marks three providers **keyless** (no `Authorization` header at all). The maintainer verified
+them with real requests on 2026-10-13 (`_lead/live-probe-2026-10-13.md`), sending **no** credential:
+
+| Provider | Model | Result |
+|---|---|---|
+| `kilo` (`https://api.kilo.ai/api/gateway/v1`) | `nvidia/nemotron-3-super-120b-a12b:free` | **HTTP 200**, real completion |
+| `kilo` | `nvidia/nemotron-3-ultra-550b-a55b:free` | free route, 550B class |
+| `ovh` (`https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`) | `gpt-oss-120b` | **HTTP 200** |
+| `llm7` (`https://api.llm7.io/v1`) | `DeepSeek-V4-Flash-0731` | **HTTP 200** (anonymous) |
+| `llm7` | `codestral-latest` | **HTTP 200** (anonymous) |
+
+`kilo` and `llm7` are **enabled by default**, so those two carry the "install and it works" promise.
+`ovh` is keyless too but **disabled by default** (2 requests/minute — far too tight to be in the default
+candidate set); enable it explicitly if you want it.
+
+Three things you should know before you rely on a keyless pool:
+
+- **Keyless is not unlimited.** Kilo is documented at ~200 requests/hour per IP, LLM7 at ~100/hour, OVH at
+  2 RPM. Quota numbers throughout this document come from the upstream registry baseline (2026-04) and may
+  be stale; the plugin reacts to them rather than trusting them — a 429 parks that candidate and moves on.
+- **Free traffic may be recorded and used for training.** Kilo states this in its own provider registry
+  (free prompts and completions are logged for training). If that is not acceptable to you, disable it:
+
+  ```yaml
+  providers:
+    kilo:
+      enabled: false
+  ```
+
+  With `kilo` off, zero-config still works through `llm7` alone.
+- **Free model catalogs drift.** During the 2026-10-13 probe, `llm7` answered `400 model_unavailable` for
+  `gpt-oss-20b` and `GLM-4.6V-Flash` — the same kind of id that worked the day before. The router treats
+  `model_unavailable` as a *per-model* condition: it parks that `(provider, model)` pair and tries the next
+  candidate instead of failing your request. Seeing one of these is normal operation, not a bug.
+
+## Adding keys
+
+Keys are the single biggest quality upgrade: the default candidate pool is `groq`, `cerebras`, `openrouter`,
+`kilo`, `llm7`, and adding the first three gives you the strong-and-fast models.
+
+Set a key by exporting the environment variable named in `apiKeyEnv` — or paste it in
+**Settings → Models / Plugins**, where DSH stores it through its credentials service. Resolution order is:
+credentials service → `config.providers[id].apiKey` → environment variable named by `apiKeyEnv` → the
+convention `<PROVIDER_ID>_API_KEY`. Empty values count as "not configured".
+
+| Provider | `apiKeyEnv` | Key page | Free tier (upstream baseline) | Default | Notes |
+|---|---|---|---|---|---|
+| `groq` | `GROQ_API_KEY` | <https://console.groq.com/keys> | 30 RPM / 1000 RPD / ~8K TPM / 200K TPD | ✅ on | Fast; `openai/gpt-oss-120b`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant` |
+| `cerebras` | `CEREBRAS_API_KEY` | <https://cloud.cerebras.ai/> | 30 RPM / no RPD / 60K TPM / 1M TPD | ✅ on | Two models rated capability 5 **and** speed 5; upstream notes a second, tighter quota revision (5 RPM / 30K TPM) |
+| `openrouter` | `OPENROUTER_API_KEY` | <https://openrouter.ai/keys> | 20 RPM / 200 RPD | ✅ on | The `complex` tier's main supplier (`deepseek/deepseek-v3.1:free`, `moonshotai/kimi-k2.6:free`, `qwen/qwen3-coder:free`) |
+| `llm7` | `LLM7_API_KEY` | <https://token.llm7.io/> | ~100 req/hour | ✅ on | **Keyless works**; a key raises the ceiling. Key page is reported, not independently verified |
+| `kilo` | `KILO_API_KEY` | — | ~200 req/hour per IP | ✅ on | **Keyless works.** Free traffic is logged for training |
+| `github` | `GITHUB_MODELS_TOKEN` | — | 10 RPM / 50 RPD | ⬜ off | Has `openai/gpt-5`; the rate limits are punishing |
+| `mistral` | `MISTRAL_API_KEY` | <https://console.mistral.ai/api-keys> | 500K TPM | ⬜ off | `mistral-large-latest`, `magistral-medium-latest`, `codestral-latest` |
+| `zhipu` | `ZHIPU_API_KEY` | — | ~1M TPD | ⬜ off · ⚠️ **speculative** | `glm-4.7-flash`, `glm-4.6v-flash`. **`baseURL` is the single riskiest row in the pool**: the mainland and overseas sites do not share keys, and picking the wrong hostname gives a guaranteed 401. Enable it only if you know which site your key belongs to. |
+| `volcengine` | `ARK_API_KEY` | — | ~2M TPD | ⬜ off · ⚠️ **speculative** | Chinese provider, real-name registration required; the model id is inferred, not verified |
+| `longcat` | `LONGCAT_API_KEY` | — | — | ⬜ off · ⚠️ **speculative** | No real-name requirement; model id inferred, not verified |
+| `nvidia` | `NVIDIA_API_KEY` | — | 40 RPM | ⬜ off | High capability ceiling (`qwen/qwen3-coder-480b-a35b-instruct`), but "evaluation only" trial ToS, first token can take minutes, and see the known gap in [Limitations](#limitations-and-unverified-claims) |
+| `ovh` | `OVH_AI_ENDPOINTS_KEY` | — | 2 RPM | ⬜ off | **Keyless works**, but 2 RPM only |
+
+> **`apiKeyEnv` is this plugin's own convention, not an upstream fact.** freellmapi has no such concept —
+> its keys live behind its dashboard in an encrypted store. Every name above is a *default* that you can
+> override per provider, which is what makes a wrong guess harmless:
 
 ```yaml
-# node_modules/dsh-freellmapi/cordis.patch.yml
-- insert:
-    - id: freellmapi            # loader entry id == settings namespace id
-      name: 'dsh-freellmapi'    # must resolve from the profile
+providers:
+  groq:
+    apiKeyEnv: MY_GROQ_KEY        # any name you like
+  mistral:
+    enabled: true
+  acme-gateway:                   # a provider that is not in the built-in pool at all
+    baseURL: https://llm.example.com/v1
+    apiKeyEnv: ACME_KEY
+    keyless: false
+    models:
+      - id: acme-large
+        name: Acme Large
+        capability: 5
+        speed: 3
+        contextWindow: 131072
+        maxTokens: 16384
+        toolCalling: true
 ```
 
-> ⚠️ **Only if you installed the package *without* registering it as a bundle** — i.e. you
-> skipped step 2's `bundles` line — you must insert the loader row yourself in
-> `$DSH_HOME/profiles/<profile>/cordis.patch.yml`:
+## How it picks a model
+
+Every request is scored by a **pure, deterministic classifier** (`lib/complexity.js`): no clock, no
+randomness, no network, no mutation. The same conversation always routes the same way, and every signal
+that produced the verdict is reported.
+
+### The three tiers
+
+| Tier | Score | What it means for ranking |
+|---|---|---|
+| `simple` | `< 0.34` | Capability counts 0.25, speed 0.75 — take the fastest model that can do the job |
+| `medium` | `0.34 – 0.67` | 0.50 / 0.50 — balanced |
+| `complex` | `≥ 0.67` | Capability 0.80, speed 0.20 — take the strongest model, latency be damned |
+
+### The signals
+
+Seven signals, each normalised to `[0, 1]` and multiplied by its own weight. They are combined with a
+**noisy-OR**, so several independently demanding facets compound instead of averaging away:
+
+```text
+score = 1 − Π (1 − wᵢ · sᵢ)  −  simplePenalty
+```
+
+| Signal | Weight | Saturates at | What it reads |
+|---|---|---|---|
+| `tokens` | 0.46 | 2 500 estimated tokens | Input size. CJK counts ≈ 1 token/char, Latin ≈ 1 token/4 chars |
+| `tools` | 0.52 | 8 tool schemas | Every tool the model must follow instructions for |
+| `keywords` | 0.60 | 2 distinct word families | `refactor`, `architect`, `prove`, `debug`, `重构`, `架构`, `证明`, `为什么`, … |
+| `reasoning` | 0.50 | — | Math notation (0.25), comparison words (0.25), "step by step" (0.5) |
+| `code` | 0.32 | 2 blocks / 120 lines | Fenced code blocks (40 %) and their line count (60 %) |
+| `depth` | 0.20 | 20 messages / 6 turns | Conversation length and assistant+tool turns |
+| `images` | 0.06 | 2 images | Presence of an image — plus a **hard floor at `medium`**, because only a vision-capable model can serve it |
+
+Simple-task words (`translate`, `summarize`, `list`, `翻译`, `总结`, `列出`, …) **subtract** a 0.22 penalty —
+the one place a signal can lower the score.
+
+### Worked examples (measured, not invented)
+
+Run against this implementation:
+
+| Request | Tier | Score | Why |
+|---|---|---|---|
+| `列出这个目录下的文件` | `simple` | 0.000 | 10 tokens, one simple-task keyword that subtracts everything |
+| `解释这段代码` + a 200-line fenced block | `medium` | 0.349 | 659 estimated tokens and 200 code lines — just over the `medium` boundary |
+| `重构这个模块并给出架构权衡与失败模式分析` + 12 tool schemas | `complex` | 0.822 | 12 tools, 4 complexity keywords, 1 comparison marker — and only ~27 tokens, which a weighted *mean* would have averaged away |
+
+And what the tier actually changes, with the default pool and every key configured:
+
+| Rank | `simple` | `complex` |
+|---|---|---|
+| 1–5 | cerebras `llama-4-maverick-17b` (c5/s5), cerebras `qwen-3-coder-480b` (c5/s5), cerebras `gpt-oss-120b` (c4/s5) | same two c5/s5 models, then kilo `nemotron-3-super-120b` (c5/s3) |
+| 6–7 | cerebras `llama3.1-8b` (c2/s5), groq `llama-3.1-8b-instant` (c2/s5) | openrouter `deepseek-v3.1:free` (c5/s3), `kimi-k2.6:free` (c5/s3) |
+| 16–17 | openrouter `qwen3-coder:free` (c5/s3), `nemotron-nano-12b-v2-vl` (c3/s3) | cerebras `llama3.1-8b` (c2/s5), groq `llama-3.1-8b-instant` (c2/s5) |
+
+(The two Cerebras models are rated capability 5 *and* speed 5, so they legitimately top every tier. The
+tier decides the order **below** them, and that is where a small fast model jumps from 17th to 6th.)
+
+### When it gets it wrong, and how to override it
+
+**This is a heuristic, not semantic understanding.** It counts tokens, fences, tool schemas and words. It
+can be wrong in both directions, and here are real cases from this implementation:
+
+| Request | Tier | Why it is wrong |
+|---|---|---|
+| `证明这个定理` ("prove this theorem") | `simple` (0.304) | One complexity word family saturates only halfway, and the request is six tokens long — a genuine reasoning task lands in the fast lane |
+| 3 750 tokens of keyword-free prose | `medium` (0.463) | Tokens alone cap out at 0.46, below the `complex` boundary — a long, demanding analysis never reaches `complex` on size alone |
+| `翻译这段话` + 12 tools | `medium` (0.413) | The tool signal pushes it up while the simple-task penalty pulls it down |
+
+So when *you* know better than the classifier, say so — the model id **is** the override:
+
+| Model | Effect |
+|---|---|
+| `auto` | Classify, then route (the default) |
+| `auto:simple` | Force the fast lane |
+| `auto:medium` | Force the balanced lane |
+| `auto:complex` | Force the strongest lane |
+
+The classifier still runs for the forced tiers — the score and the reasons are recorded, and the log line
+says `(forced by the selected model id)` — but the tier no longer decides.
+
+Tuning, if you want to bend the thresholds rather than pin a lane (advanced; edit in the profile patch):
+
+```yaml
+routing:
+  thresholds:
+    medium: 0.25      # default 0.34 — more requests become "medium"
+    complex: 0.55     # default 0.67 — more requests become "complex"
+  weights:
+    tokens: 0.60      # standalone maximum contribution, not a share of a total
+    tools: 0.40
+```
+
+## Failover and health
+
+**The one hard rule: failover may only happen before a single chunk has reached DSH.** Once any chunk has
+been yielded — even a bare `block-start` — a failure ends the stream with an error instead of switching
+provider, because splicing two models' output into one assistant message is worse than an honest failure.
+The rule is enforced twice (in `dispatchOnce` and again in the failover loop), and tested against a socket
+that dies mid-stream plus a healthy standby that must receive **zero** requests.
+
+What gets retried:
+
+| Condition | Failover? | Why |
+|---|---|---|
+| `429`, `408`, `409`, `410`, `422`, `5xx` | ✅ | The provider's problem; the next one may well answer |
+| `404` | ✅ | Usually means "this provider does not serve that id" — and it parks the pair, like `model_unavailable` below |
+| `400 model_unavailable` | ✅ | **The deliberate exception to "400 is a bad request"**: aggregators rotate their catalogs, so this is a per-`(provider, model)` state → park it exactly like a `404 model_not_found`, then try the next candidate |
+| Other `400`s | ❌ | A malformed request stays malformed everywhere |
+| `401` / `403` | ❌ | A rejected credential belongs to that provider; the provider is parked for 24 h |
+
+Health and cooldowns:
+
+- **The first retryable failure already parks the candidate**, for 2 minutes — no "three strikes" grace
+  period, because a free-tier 429 means "back off now", and paying the same wall twice only adds latency.
+  Each further consecutive failure escalates one step: **2 m → 10 m → 1 h → 24 h**. A `Retry-After` header
+  overrides the ladder, because the provider is the only party that knows when its budget resets.
+- Failures also lower a candidate's score, so a recently failed route ranks below healthy peers:
+  `1 / (1 + 0.15 · effectiveFailures)` (floor 0.4). `effectiveFailures` **decays with a 60-second
+  half-life**, so the penalty cannot starve a candidate forever: by the time the 2-minute cooldown has
+  expired, a single failure weighs only 0.25, and one success clears the counter outright.
+- Latency participates only when it is real evidence:
+  - the factor is `fastest / latency`, clamped to `[0.85, 1]` and computed against the fastest candidate
+    **of this request**;
+  - **an unmeasured candidate does not get a perfect score.** With no evidence of its own it is treated as
+    "no faster than the slowest factor actually measured in this request"; only when nothing measurable was
+    observed does the signal drop out completely (everyone gets 1). Otherwise "we have never looked at it"
+    would beat "we measured it and it is slow", which is backwards;
+  - a **100 ms noise floor** applies: if the spread between the measured candidates is smaller than that,
+    the whole latency signal is discarded as warm-up noise (a 4 ms versus 26 ms localhost difference is not
+    throughput), and every candidate scores as unmeasured.
+  Because the demotion is capped at 0.85, latency can reorder candidates but cannot overturn the tier's
+  capability-versus-speed decision.
+- A mid-stream failure does not park the provider (one interrupted stream is weak evidence); it only counts
+  as a failure for the next ranking.
+- Attempts are bounded by `routing.maxAttempts` (default 6) and `routing.budgetMs` (default 45 000 ms), both
+  checked *before* each attempt.
+
+**Failures come back in-band, not as a crash.** Every outcome below ends the stream with a terminal
+`finish` chunk carrying a stable DSH code: no exception ever crosses the adapter boundary.
+
+| Code | Meaning |
+|---|---|
+| `NO_CANDIDATES` | Nothing usable in the pool — nothing configured and no keyless provider enabled, or every candidate failed a hard gate (vision / tools / context window / cooldown). The message lists key-application entry points. |
+| `ALL_CANDIDATES_FAILED` | Every ranked candidate was tried and failed; the message carries a `provider/model → code` trail. |
+| `STREAM_INTERRUPTED` | The stream failed after output had already been sent — no failover by design. |
+| `MODEL_UNAVAILABLE` | The provider does not currently serve that model. |
+| `ABORTED`, `TIMEOUT`, `TRANSPORT`, `AUTH`, `RATE_LIMIT`, `QUOTA`, `CONTEXT_WINDOW_EXCEEDED`, `UNSUPPORTED_CONTENT`, `UNSUPPORTED_OPTION`, `INVALID_REQUEST`, `SERVER`, `MISSING_CREDENTIAL`, `INVALID_CREDENTIAL`, `EMPTY_RESPONSE`, `CONTENT_FILTER`, `UNKNOWN` | The usual per-attempt classifications |
+
+For `429`/`quota_exceeded`, the provider's `Retry-After` (when it sends one) is parsed into DSH's
+retry-after field, so the harness backs off for exactly as long as the pool said to.
+
+## Two modes: `direct` and `gateway`
+
+| | `direct` (**default**) | `gateway` |
+|---|---|---|
+| Who routes | This plugin (classifier + ranker + failover) | An external [freellmapi](https://github.com/tashfeenahmed/freellmapi) gateway |
+| Needs an external process | ❌ no | ✅ yes (Docker or `node server/dist/index.js` on `:3001`) |
+| Credentials | One key per provider, or none at all | One unified `freellmapi-…` gateway key |
+| Model picker | `auto`, `auto:simple/medium/complex`, then `provider/model` | `auto`, `auto:smart/fast/cheap/reliable/balanced`, `fusion`, discovered catalog |
+| Log line | `dsh-freellmapi: tier=… -> provider/model (…)` | `dsh-freellmapi: routed via <platform>/<model> (model=…)` |
+| Use it when | You want the shortest path from install to a working model | You already run the gateway, or you want its bandit scoring, `fusion`, prompt compression and dashboard |
+
+Switch with one field:
+
+```yaml
+mode: gateway            # default is "direct"; gateway also needs baseURL + a freellmapi-… key
+```
+
+> **The two modes can coexist in one install, but the `freellmapi` provider name is owned by exactly one
+> adapter.** freellmapi's official `npx freellmapi setup-dsh --url http://localhost:3001 --api-key <key>`
+> writes an `llm-pi-ai.providers.freellmapi` route, whose DSH provider name is also `freellmapi`. Provider
+> route names are unique per process, so whichever adapter registers second is rejected. If you already ran
+> `setup-dsh`, remove that route before installing this plugin — the plugin refuses to load with a message
+> naming exactly this conflict, rather than failing silently.
 >
-> ```yaml
-> - insert:
->     - id: freellmapi
->       name: 'dsh-freellmapi'
-> ```
->
-> **Never do both.** A bundle registration plus a hand-written row with the same `id` gives the
-> composed tree two entries with one id, and DSH refuses to start that profile with a
-> `duplicate loader entry id "freellmapi"` error. This is a real, previously observed failure
-> mode in DSH profiles, and it is why the GUI path is the recommended one.
-
-### Verify the install
-
-1. The Plugins manager lists `dsh-freellmapi` and it is enabled.
-2. **Settings → Models** shows a **FreeLLMAPI (Auto)** provider route (the plugin registers it as
-   a configurable provider, so it is visible even before you fill in the key).
-3. The model picker offers `auto` and at least one `auto:<strategy>` entry.
-4. A first chat turn with model `auto` returns text rather than `MISSING_CREDENTIAL`.
-
-If step 2 or 3 fails, see [Troubleshooting](#troubleshooting).
+> And yes: **if the gateway is the only thing you want, `setup-dsh` needs no plugin at all.** It writes
+> `$DSH_HOME/settings.yaml` + `$DSH_HOME/.env` (mode `0600`) and sets the default model. This plugin's
+> `gateway` mode exists for people who want the routed-via visibility and per-request failure detail on top.
 
 ## Configuration
 
-The plugin's config schema is also its settings page, so every field below is editable in the
-GUI (**Settings → Plugins → dsh-freellmapi**) and overridable in the profile patch file. All
-fields are live: a settings edit takes effect on the next request, with no restart and no
-re-registration.
+Every field is **live** (a settings edit applies to the next request, no restart) and validated
+**totally** — a malformed value falls back to its default instead of preventing the plugin from loading.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `baseURL` | string | `http://localhost:3001/v1` | OpenAI-compatible root of the gateway. The plugin appends `/chat/completions` and `/models`; trailing slashes are trimmed. A value that is not an `http(s)://` URL degrades to the default instead of breaking later inside `fetch`. |
-| `apiKeyEnv` | string | `FREELLMAPI_API_KEY` | *Reference name* for the credential — an environment variable name or a credentials-store key. **Not** the key itself. |
-| `apiKey` | string (secret) | `''` | Optional inline credential. Leave empty and prefer `apiKeyEnv`: a value here is stored in the profile patch, in plain text. |
-| `maxTokensField` | `max_tokens` \| `max_completion_tokens` | `max_tokens` | Which wire field carries the output cap. `max_tokens` is the canonical field (the one freellmapi documents); the gateway also accepts `max_completion_tokens` and prefers `max_tokens` when both are present, so switch to the second only if a specific model demands it. |
-| `logRoutedVia` | boolean | `true` | Log the upstream `X-Routed-Via`, plus `X-Fallback-Attempts` / `X-Fallback-Trail` when present, for every request. |
-| `includeFusion` | boolean | `true` | Advertise the gateway's `fusion` route (panel of models + judge) in the model picker. |
-| `exposeDiscoveredModels` | boolean | `true` | Merge `GET /v1/models` results into the picker next to the virtual `auto:*` routes. |
-| `vision` | boolean | `true` | Declare image-input support, so DSH sends attachments as images instead of replacing them with text. Set `false` for a text-only chain. |
-| `contextWindow` | number | `131072` | Context window assumed for routes the gateway does not describe (used for compaction budgets). |
-| `maxTokens` | number | `0` | Default output cap declared to DSH. `0` declares none, leaving the decision to the gateway and the upstream model. |
-| `timeoutMs` | number | `600000` | Per-request timeout in milliseconds; `0` disables it. On expiry the request ends with a `TIMEOUT` failure. |
-| `discoveryTimeoutMs` | number | `5000` | Timeout for the `GET /v1/models` discovery request. |
-| `discoveryCacheMs` | number | `60000` | How long a successful discovery result stays fresh. |
-| `headers` | map | `{}` | Extra request headers. `user-agent`, `authorization`, `content-type` and `accept` are reserved and cannot be overridden. |
-| `taskType` | `''` \| `auto` \| `code` \| `chat` | `''` | Optional `X-FreeLLM-Task-Type` hint that biases the router (`code` trades speed against intelligence). Empty sends no header. `fastest`/`reliable` chains ignore it upstream. |
-| `cacheMode` | `''` \| `on` \| `off` | `''` | Optional `X-FreeLLM-Cache` switch for the gateway's exact-match response cache. Empty sends no header. |
+| `mode` | `direct` \| `gateway` | `direct` | Self-contained routing, or forward to an external gateway |
+| `baseURL` | string | `http://localhost:3001/v1` | Gateway mode only: OpenAI-compatible root of the freellmapi gateway |
+| `apiKeyEnv` | string | `FREELLMAPI_API_KEY` | Gateway mode only: credential *reference name* (not the key) |
+| `apiKey` | string (secret) | `''` | Gateway mode only: optional inline credential; prefer `apiKeyEnv` |
+| `providers` | dict or array | `{}` | Per-provider overrides for the built-in pool (see below) |
+| `routing` | dict | `{maxAttempts: 6, budgetMs: 45000}` | Routing-engine knobs (see below) |
+| `logRouting` | boolean | `true` | Log the direct-mode routing decision (tier, winner, candidates tried) |
+| `logRoutedVia` | boolean | `true` | Log `X-Routed-Via` / fallback trail (gateway mode) |
+| `vision` | boolean | `true` | Advertise image input when the chosen model supports it; set `false` to force text-only |
+| `contextWindow` | number | `131072` | Context window assumed for ids the pool does not describe |
+| `maxTokens` | number | `0` | Output cap declared to DSH; `0` = declare none and let the provider decide |
+| `timeoutMs` | number | `600000` | Per-attempt timeout in milliseconds; `0` disables it |
+| `includeFusion` | boolean | `true` | Gateway mode: advertise the gateway's `fusion` route |
+| `exposeDiscoveredModels` | boolean | `true` | Gateway mode: merge `GET /v1/models` into the picker |
+| `discoveryTimeoutMs` | number | `5000` | Gateway mode: timeout for that discovery request |
+| `discoveryCacheMs` | number | `60000` | Gateway mode: how long a discovery result stays fresh |
+| `maxTokensField` | `max_tokens` \| `max_completion_tokens` | `max_tokens` | Which wire field carries the cap. `max_tokens` is the canonical field; the gateway also accepts the other |
+| `headers` | map | `{}` | Extra request headers. `user-agent`, `authorization`, `content-type`, `accept` are reserved |
+| `taskType` | `''` \| `auto` \| `code` \| `chat` | `''` | Gateway mode: optional `X-FreeLLM-Task-Type` hint (empty sends no header) |
+| `cacheMode` | `''` \| `on` \| `off` | `''` | Gateway mode: optional `X-FreeLLM-Cache` switch (empty sends no header) |
 
-> The settings form is generated when the host resolves `@deepseek-ai/schemastery` (it normally
-> does in a DSH profile). If it does not, the plugin still loads and runs with exactly these
-> defaults — you just get no generated form, and you configure it through the profile patch
-> instead. No configuration value, however malformed, can stop the plugin from loading.
+> The settings form is generated when the host resolves `@deepseek-ai/schemastery` (it normally does in
+> a DSH profile). If it does not, the plugin still loads and runs with exactly these defaults — you just
+> configure it through the profile patch instead. No configuration value, however malformed, can stop
+> the plugin from loading.
 
-### Three ways to provide `baseURL` and the key
+One environment escape hatch worth knowing: **`FREELLMAPI_BASE_URL`** overrides the gateway endpoint from
+the environment, and it is honoured **only while `baseURL` still holds its built-in default**, so an
+explicit setting always wins over the environment.
 
-**1. DSH settings page (recommended).** Open **Settings → Models** (or the plugin's own card
-under **Settings → Plugins**) and set:
+### `providers.<id>` — override one pool entry
 
-- `baseURL` → `http://localhost:3001/v1` (or your remote gateway's URL)
-- the key → paste the `freellmapi-…` value into the route's credential field. DSH stores it
-  through the credentials service under the name configured in `apiKeyEnv`, and the plugin
-  re-resolves it on **every** request, so a rotated key takes effect without a restart.
-
-**2. Environment variable.** `FREELLMAPI_API_KEY` is the default reference name, so this works
-without touching the config at all:
-
-```bash
-# PowerShell (current session)
-$env:FREELLMAPI_API_KEY = "freellmapi-…"
-
-# bash / zsh
-export FREELLMAPI_API_KEY="freellmapi-…"
-
-# $DSH_HOME/.env — DSH loads this as its user environment layer, so no export is needed.
-# Keep the file private (the official setup-dsh writes it with mode 0600).
-FREELLMAPI_API_KEY=freellmapi-…
-```
-
-If you change `apiKeyEnv`, the plugin looks up that name instead — and still falls back to
-`FREELLMAPI_API_KEY` afterwards. The endpoint has its own escape hatch:
-
-```bash
-FREELLMAPI_BASE_URL=http://192.168.1.20:3001/v1
-```
-
-`FREELLMAPI_BASE_URL` is honoured **only while `baseURL` still holds its built-in default**, so
-an explicit setting always wins over the environment.
-
-The key itself is resolved, per request, in this order:
-
-1. the DSH **credentials service** under the name in `apiKeyEnv` (that service is itself layered
-   over the process environment, its managed store, and `$DSH_HOME/.env`);
-2. the plugin's inline **`apiKey`** setting, if you set one;
-3. the **process environment**: `apiKeyEnv`, then `FREELLMAPI_API_KEY`.
-
-An **empty value counts as "not configured"** at every step, exactly like an unset variable, and
-the plugin then reports `MISSING_CREDENTIAL` with the reference name it looked for. Because the
-lookup happens on every request, a rotated key takes effect on the next call without a restart.
-
-**3. Profile patch file.** Override the plugin's config without touching the global settings
-document, in `$DSH_HOME/profiles/<profile>/cordis.patch.yml`:
-
-```yaml
-- id: freellmapi                 # the loader entry id inserted by the bundle's patch
-  config:
-    baseURL: http://localhost:3001/v1
-    apiKeyEnv: FREELLMAPI_API_KEY
-    logRoutedVia: true
-```
-
-This is the profile patch layer, which is applied *after* every bundle layer, so it wins over
-the bundle's own defaults while leaving `$DSH_HOME/settings.yaml` untouched.
-
-> Never put the key itself in `cordis.patch.yml`, in `settings.yaml`, or in a committed file.
-> Only the *reference name* (`apiKeyEnv`) belongs in configuration.
-
-## Using Auto mode
-
-1. Open the model picker in the DSH GUI.
-2. Choose the provider **FreeLLMAPI (Auto)** (route id `freellmapi`).
-3. Choose a model:
-
-| Model id | What the gateway does |
+| Key | Meaning |
 |---|---|
-| `auto` | Uses the **currently active fallback chain** as-is. It does not re-rank the global pool. |
-| `auto:smart` | Intelligence-first ordering (weights ≈ reliability 0.35 / speed 0.10 / intelligence 0.55). |
-| `auto:fast` | Measured speed first — throughput plus time-to-first-byte (≈ 0.35 / 0.55 / 0.10). |
-| `auto:cheap` | Budget-leaning. Upstream documents it as the same recipe as `balanced` (the pool is free anyway). |
-| `auto:reliable` | Recent success rate first (≈ 0.70 / 0.15 / 0.15). |
-| `auto:balanced` | The default mix — reliability first, speed and intelligence split the rest (≈ 0.50 / 0.25 / 0.25). |
-| `auto:<profile>` | A **named fallback chain** you created in the freellmapi dashboard. The name is lower-cased in the model id. |
-| `fusion` | The gateway's fan-out mode (a panel of models answers, a judge synthesises). Appears if the running router lists it. |
+| `enabled` | Turn a provider on/off. This is how you enable the seven providers that ship disabled |
+| `displayName` | Label used in the picker and logs |
+| `baseURL` | Endpoint root — fix a hostname without waiting for a release (see `zhipu`) |
+| `apiKeyEnv` | Your own credential reference name for this provider |
+| `apiKey` | Inline credential for this provider (stored in the profile patch — prefer `apiKeyEnv`) |
+| `keyless` | Mark a custom endpoint as usable without a credential |
+| `models` | **Replaces** the built-in model list for that provider. Each entry: `id`, `name`, and `capability` / `speed` (1–5), `contextWindow`, `maxTokens`, `vision`, `toolCalling` — either inline or under `caps` |
 
-Notes that save time later:
+A provider that is not in the built-in pool at all is added the same way: give it `id`/`baseURL` and a
+`models` list (see [Adding keys](#adding-keys)).
 
-- **The model string reaches the gateway verbatim.** The adapter forwards `auto`, `auto:smart`,
-  `auto:<your-profile>`, `fusion` or any concrete catalog id unchanged and always asks for
-  `stream: true` — it never rewrites, normalises or omits the model. What the picker shows is a
-  convenience, not a whitelist: unlisted ids are still answered.
-- **The picker is `auto` first, then the rest.** It always advertises the six virtual routes
-  (bare `auto` at the top, then the five documented strategies) plus `fusion` while
-  `includeFusion` is on, then everything `GET /v1/models` reports.
-- **The whole model string is case-insensitive**, and the gateway also accepts common synonyms
-  (`auto:fastest`, `auto:speed`, `auto:smartest`, `auto:cheapest`, `auto:budget`). Treat the
-  table above as documented aliases, not as a closed enum — this plugin does not reject
-  strategy names it does not know.
-- **An unknown `auto:<profile>` is a hard `400`** from the gateway. freellmapi never silently
-  falls back to `auto` in that case, and neither does this plugin. The failure message says so
-  explicitly, so check the chain name in the dashboard.
-- **Failures come back in-band, not as a crash.** A transport error, `401`, `429`, `5xx`, a
-  mid-stream `stream_error` frame, an unusable `GenerateOptions.stop`, a timeout or a cancellation
-  all end the stream with a terminal `finish` chunk whose `reason.kind` is `error` or `aborted`,
-  carrying a stable DSH code: `AUTH`, `RATE_LIMIT`, `QUOTA`, `CONTEXT_WINDOW_EXCEEDED`,
-  `UNSUPPORTED_CONTENT`, `UNSUPPORTED_OPTION`, `INVALID_REQUEST`, `SERVER`, `TRANSPORT`, `TIMEOUT`,
-  `ABORTED`, `MISSING_CREDENTIAL`, `INVALID_CREDENTIAL`, `EMPTY_RESPONSE`, `CONTENT_FILTER` or
-  `UNKNOWN`. A successful turn ends with `stop`, `tool-calls` or `max-tokens` instead. For
-  `429`/`quota_exceeded` the plugin also parses `Retry-After` into DSH's retry-after field when the
-  gateway sends one.
-- **Some codes are deliberately not normalised.** An in-band error frame from the gateway carries
-  its own `error.code`, and that string becomes the failure code **verbatim** — it falls back to
-  `SERVER` only when the frame carries no code at all. A `stream_error` frame therefore surfaces as
-  `failure.code === "stream_error"`, not as a generic `SERVER`. Codes the gateway invents are not in
-  DSH's default retryable set (`EMPTY_RESPONSE`, `RATE_LIMIT`, `SERVER`, `TIMEOUT`, `TRANSPORT`),
-  so such a failure does **not** trigger a DSH retry. That is intentional: the plugin reports what
-  the gateway actually said instead of laundering it into a retryable code, which keeps retry
-  policy on the gateway's side.
-- **Images**: when `vision` is on, the plugin declares image input, reads the referenced
-  attachments and inlines them as `data:` URLs (up to 20 MB each). An attachment it cannot read
-  degrades to a text placeholder rather than failing the request. Upstream, an image request is
-  only routed to a vision-capable model; if the active chain has none, the gateway returns `422`
-  with `code: "no_vision_model"` and the plugin says which of the two you are looking at.
+### `routing` — engine knobs
 
-### How to confirm which provider actually answered
+| Key | Default | Meaning |
+|---|---|---|
+| `maxAttempts` | `6` | Maximum candidates tried for one request |
+| `budgetMs` | `45000` | Total failover time budget; `0` = unlimited |
+| `thresholds.medium` | `0.34` | Score at which `simple` becomes `medium` |
+| `thresholds.complex` | `0.67` | Score at which `medium` becomes `complex` |
+| `weights` | per-tier defaults | `{capability, speed}` or `{simple: {…}, medium: {…}, complex: {…}}` |
+| `preferredOrder` | `[]` | Provider ids you want preferred; a bounded bonus of at most 0.05 |
 
-Every freellmapi response carries `X-Routed-Via: <platform>/<model>`. The plugin reads it and
-writes it to the DSH log line for the request (with `logRoutedVia` on, which is the default).
-The lines look like this:
+### Three ways to set them
+
+1. **Settings page** — **Settings → Plugins → dsh-freellmapi** (every top-level field, with the generated
+   form described above).
+2. **Profile patch** — `$DSH_HOME/profiles/<profile>/cordis.patch.yml`; the recommended place for
+   `providers` and `routing`:
+
+   ```yaml
+   - id: freellmapi
+     config:
+       mode: direct
+       logRouting: true
+       providers:
+         cerebras:
+           enabled: true
+         kilo:
+           enabled: false        # if you do not accept its training-recording terms
+       routing:
+         maxAttempts: 4
+         preferredOrder: [cerebras, groq]
+   ```
+
+3. **Environment** — the per-provider `apiKeyEnv` names in [Adding keys](#adding-keys).
+
+## How to see what it did
+
+**Direct mode** logs one line per request:
 
 ```text
-dsh-freellmapi: routed via groq/llama-3.3-70b (model=auto)
-dsh-freellmapi: routed via google/gemini-2.5-flash (model=auto:fast) fallback-attempts=2 trail=groq/… key1=rate_limited; …
+dsh-freellmapi: tier=complex -> openrouter/deepseek/deepseek-v3.1:free (capability=5, speed=3, 2 candidates tried)
+dsh-freellmapi: tier=simple -> no candidate (0 candidates tried)
 ```
 
-Three details that matter when you are debugging:
+**Gateway mode** logs its original line:
 
-- `X-Routed-Via` is the **only** reliable "who served this" signal. The hop currently serving
-  the request cannot appear in `X-Fallback-Trail`, because the headers are flushed before the
-  body is generated.
-- `X-Fallback-Attempts` / `X-Fallback-Trail` appear only when the router actually fell back
-  across providers; their absence means "first try worked".
-- Non-ASCII model ids arrive percent-encoded in the header and are decoded before logging.
-
-The plugin also keeps the last 50 routing observations in a process-wide ring buffer, exported
-as `getRecentRoutes()` for tests and future UI. It is not a DSH tool or service, so use the log
-line in normal operation.
-
-You can see the same thing without DSH at all:
-
-```bash
-curl -si http://localhost:3001/v1/chat/completions \
-  -H "Authorization: Bearer freellmapi-<unified-key>" \
-  -H "content-type: application/json" \
-  -d '{"model":"auto","messages":[{"role":"user","content":"hi"}]}' \
-  | grep -i '^x-routed-via'
+```text
+dsh-freellmapi: routed via groq/llama-3.3-70b (model=auto) fallback-attempts=2 trail=groq/… key1=rate_limited; …
 ```
+
+The plugin also keeps the last 50 routing observations in a process-wide ring buffer — exported as
+`getRecentRoutes()` (with `formatDirectRouteLine()` / `formatRouteLine()`) for tests and future UI. Each
+record carries the tier, score, chosen provider/model, every attempt and its failure code, the candidates
+that were excluded and why, and the classifier's reasons. It is not a DSH tool or service, so the log line
+is what you use day to day.
+
+## Just one key? No keys?
+
+**No keys at all:** works, through `kilo` and `llm7` (both enabled and keyless). "Complexity routing" then
+means choosing between two pools' worth of models rather than five — still real routing and still
+failover-capable, but a much thinner choice.
+
+**Exactly one provider configured:** works, and the classifier still runs — but with a single provider's
+models the ranking degenerates into "pick the best model that provider has for this tier". You need **at
+least two** providers before routing has anything to route *between*.
+
+**What does *not* happen:** a missing key is never an error. Providers without a usable credential are
+dropped from the candidate pool silently — no warning, no "configuration incomplete" banner. That is
+deliberate: a keyless pool must keep working on a machine where nothing is configured.
 
 ## Architecture
 
 ```text
-┌──────────────────────────── DeepSeek Harness (host process) ─────────────────────────────┐
+┌───────────────────────────── DeepSeek Harness (host process) ────────────────────────────┐
 │                                                                                          │
-│   agent loop / chat turn                                                                 │
-│        │                                                                                 │
-│        ▼                                                                                 │
-│  llm service (ctx.llm)  ── route selected by GenerateOptions.provider ──▶ freellmapi     │
+│  agent loop / chat turn                                                                  │
 │       │                                                                                  │
 │       ▼                                                                                  │
-│  LlmAdapter (this plugin, provider = "freellmapi")                                       │
-│    • providerInfo()  →  { id: "freellmapi", name: "FreeLLMAPI (Auto)" }                  │
-│    • listModels()    →  GET  {baseURL}/models            (live catalog)                  │
-│    • resolveModel()  →  auto / auto:smart / auto:<profile> / fusion / <catalog ids>      │
-│    • stream()        →  POST {baseURL}/chat/completions  (SSE, model passed verbatim)    │
-│    • reads back      ←  X-Routed-Via, X-Fallback-Attempts / -Trail                       │
-│    • config + key    ←  settings page · credentials service · environment                │
+│  llm service (ctx.llm)     route chosen by GenerateOptions.provider                      │
+│       │                                                                                  │
+│       ▼                                                                                  │
+│  LlmAdapter  (this plugin, provider = "freellmapi")                                      │
+│       │                                                                                  │
+│       │  the model id decides the lane:                                                  │
+│       │    auto            → classify                                                    │
+│       │    auto:simple     → force the fast lane                                         │
+│       │    auto:medium     → force the balanced lane                                     │
+│       │    auto:complex    → force the strongest lane                                    │
+│       │    provider/model  → pin exactly one candidate                                   │
+│       ▼                                                                                  │
+│  scoreComplexity()  →  simple / medium / complex  +  score  +  reasons                   │
+│       │                                                                                  │
+│       ▼                                                                                  │
+│  listProviderModels()  →  rankCandidates()                                               │
+│       │      hard gates: vision · tools · context window · cooldown                      │
+│       │      soft: consecutive failures · latency · preferred order                      │
+│       ▼                                                                                  │
+│  dispatchWithFailover()    attempt 1 ─▶ 429 / 5xx / model_unavailable / timeout          │
+│       │                        └─▶ park it, take the next ─▶ attempt 2                   │
+│       │                                                                                  │
+│       │  ══════════════════════════════════════════════════════════════════════          │
+│       │  the first chunk reached DSH                                                     │
+│       │    past this line NO failover happens: a mid-stream failure ends the stream      │
+│       │    with an error instead of splicing two models into one answer                  │
+│       ▼                                                                                  │
+│  StreamChunk sequence → DSH                                                              │
 │                                                                                          │
-└───────────────┬──────────────────────────────────────────────────────────────────────────┘
-                │  Authorization: Bearer freellmapi-…
-                │  user-agent: deepseek-harness/<version> (+…)   ← attribution header
-                ▼
-   ┌────── freellmapi gateway / router ───────────────────────────────────────────────┐
-   │  http://localhost:3001/v1                                                        │
-   │  • one unified key (freellmapi-…) in front of every upstream provider            │
-   │  • bandit-scored routing: reliability / speed / intelligence weights             │
-   │  • key health, cooldowns, monthly budgets, per-request cache & compression       │
-   │  • cross-provider failover, then the SSE pump: tool-call reassembly,             │
-   │    usage frames, keep-alive frames, error mapping                                │
-   └───────┬───────────────┬───────────────┬───────────────┬───────────────┬──────────┘
+└──────────┬───────────────┬───────────────┬───────────────┬───────────────┬───────────────┘
            ▼               ▼               ▼               ▼               ▼
-       provider A      provider B      provider C      provider D      …  (~34 providers)
-          the winner of each request is reported as  X-Routed-Via: <platform>/<model>
+     ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐
+     │ groq       │  │ cerebras   │  │ openrouter │  │ kilo       │  │ llm7       │
+     └────────────┘  └────────────┘  └────────────┘  └────────────┘  └────────────┘
+   kilo and llm7 answer without any key at all      ·      12 pools in total
 ```
 
 Notes on the seams:
 
-- The plugin is a plain host-side DSH plugin: it registers one provider route with
-  `ctx.llm.registerAdapter`, publishes the route in the configurable-provider directory for the
-  settings UI, and registers a model-discovery hook for the "add a model" flow.
-- **Every** outbound HTTP request (chat completions *and* model discovery) carries DSH's
-  attribution `user-agent` header and uses `redirect: 'error'`, so credentials can never follow
-  a redirect to a third-party host.
-- The plugin has **zero runtime dependencies** and never imports a DSH package at module scope:
-  it resolves `@deepseek-ai/dsh-llm` with a guarded dynamic import and degrades to local shims
-  when the runtime is absent, while the only declared peer (`@deepseek-ai/cordis`, optional) is
-  never imported directly. The effect is the one that matters — the plugin always binds to the
-  runtime copy DSH itself loaded. See the red line in [Troubleshooting](#troubleshooting).
-- **Retries are left to the gateway and to DSH's own default.** The adapter returns no custom
-  retry policy, because freellmapi already performs 429 cooldowns and cross-provider failover;
-  stacking retries on top would multiply latency for a condition the router is better placed to
-  fix. Requests carry a configurable timeout (`timeoutMs`) that is combined with the caller's
-  abort signal.
+- **Every** outbound request carries DSH's attribution `user-agent` and uses `redirect: 'error'`, so a
+  redirect can never leak a credential to a third host.
+- Credentials are resolved **per request** (one lookup per provider, not per model) and never cached.
+- `stream()` never throws. Every failure is an in-band `finish` chunk, which is what makes the plugin
+  immune to module-identity splits — see the red line in [Troubleshooting](#troubleshooting).
+- Zero runtime dependencies: no `dependencies` at all, and the DSH LLM runtime is resolved with a guarded
+  dynamic import that falls back to local shims outside DSH.
 
 ## Troubleshooting
 
-### 1. `ECONNREFUSED` / "cannot connect" on port 3001
+### 1. `401` / `403` — a provider rejects the key
 
-The plugin reports this as a `TRANSPORT` failure naming the exact URL it tried:
+Only one provider is affected; the router parks it (`invalid` ⇒ 24 h cooldown) and continues with the next
+candidate. Check:
+
+- Is the key exported under the exact name in `apiKeyEnv` (defaults in [Adding keys](#adding-keys))? You can
+  override the name per provider if your shell already uses a different convention.
+- Does that provider require something else — signup, real-name verification, or a specific site
+  (`zhipu` is the notorious case: mainland and overseas keys do not interchange)?
+- An empty string counts as "not configured", so an exported-but-empty variable looks identical to a
+  missing one.
+
+### 2. `429` — rate limited, and what happens next
+
+This is normal weather on free pools, not an outage. The candidate is parked immediately, on the first
+failure, and escalates the ladder if it keeps failing (`2 m → 10 m → 1 h → 24 h`), using the provider's
+`Retry-After` when it sends one; the request continues on the next-ranked candidate. Remedies: add another
+provider's key, lower concurrency, or use
+`preferredOrder` to steer to the pool with quota left.
+
+### 3. Every candidate failed — where do I look?
+
+The terminal chunk says `ALL_CANDIDATES_FAILED` and carries the trail:
 
 ```text
-dsh-freellmapi: cannot reach the FreeLLMAPI gateway at http://localhost:3001/v1 — confirm the gateway is running (default http://localhost:3001/v1), that `baseURL` ends in `/v1`, and that nothing blocks the connection [model=auto] — fetch failed: connect ECONNREFUSED 127.0.0.1:3001
+dsh-freellmapi: all 3 candidate(s) failed for tier=medium after 2 attempts — groq/llama-3.3-70b-versatile: RATE_LIMIT; …
 ```
 
-- Is the gateway actually up? `curl -s http://localhost:3001/v1/models -H "Authorization: Bearer freellmapi-<key>"`.
-- Check `baseURL`. It must point at the OpenAI-compatible root, i.e. it normally ends in `/v1`.
-  A plain `http://localhost:3001` produces `404`s instead, and the plugin calls that out
-  separately ("check that `baseURL` is the OpenAI-compatible root and normally ends in `/v1`").
-- Docker: confirm the port is published (`-p 3001:3001` / the compose port mapping) and that the
-  container is healthy — the server and the dashboard share port `3001`.
-- Remote gateway? Use its hostname and make sure nothing (firewall, reverse proxy) strips the
-  `Authorization` header. The plugin never falls back to a different host silently.
-- Windows + Docker Desktop / WSL: try `http://127.0.0.1:3001/v1` if `localhost` resolves to the
-  wrong stack.
-- Slow gateway rather than a dead one? Raise `timeoutMs` (default 10 minutes); the plugin
-  reports a request that outlives it as `TIMEOUT`, not as a hang.
+`NO_CANDIDATES` instead means the pool was empty before any request went out: nothing configured and no
+keyless provider enabled, or every candidate failed a hard gate (vision / tools / context window /
+cooldown). Its message lists key-application entry points. `STREAM_INTERRUPTED` means output had already
+been delivered, so by design there was no failover.
 
-### 2. `401` — "Missing or invalid API key"
+### 4. The model list only shows `auto` and the tier routes
 
-- The gateway expects `Authorization: Bearer freellmapi-…`. A provider key from one of the
-  34 upstreams will not work; you need the **unified key** from the freellmapi dashboard.
-- **An empty value counts as unconfigured.** An exported-but-empty `FREELLMAPI_API_KEY`
-  behaves exactly like an unset one, and the plugin reports `MISSING_CREDENTIAL` before making
-  a request. Check for empty strings, not just missing variables.
-- Confirm which reference name the plugin is looking for (`apiKeyEnv`, default
-  `FREELLMAPI_API_KEY`) and that the variable/credential exists *under that exact name*.
-- Revoked or rotated key? Re-paste it in the settings page — the plugin re-reads credentials on
-  every request, so no restart is needed.
+That is the static part of the catalog. The `provider/model` entries come from the pool and are always
+listed for **enabled** providers — even ones you have no key for. If a pinned `provider/model` then
+returns `NO_CANDIDATES`, that provider's credential was not resolvable; the silence is by design
+(see [Just one key?](#just-one-key-no-keys)).
 
-### 3. `429` — quota or rate limit exhausted
+### 5. A provider I configured is being skipped
 
-This is a gateway-level condition: **every** candidate key for the chosen model is currently
-rate-limited or out of budget. The response body carries
-`{"error":{"message":…,"type":"invalid_request_error"}}`, and for a monthly-budget exhaustion
-the gateway adds `error.code: "quota_exceeded"` plus a `Retry-After` header pointing at the
-first day of the next UTC month.
+Missing key ⇒ silently dropped from the candidate pool, no warning. Also check:
 
-- The plugin translates this into a message that names the condition and, when present, the
-  retry time — read it before retrying blindly.
-- **Do not assume `Retry-After` is always there.** Only the monthly-budget case (and one
-  embedding-specific case) is guaranteed to carry it; ordinary chat rate-limit exhaustion is
-  not.
-- Fixes that actually help: wait out the window, add another upstream key in the freellmapi
-  dashboard, lower concurrency, or switch to a strategy that spreads load (`auto:reliable`
-  prefers recent successes; `auto:fast` prefers throughput).
-- Note the free-vs-premium catalog difference: a free installation sees a catalog snapshot that
-  can be up to ~30 days old, so its notion of "which models are available" may lag reality.
-  Connection, endpoints, auth and streaming are identical in both tiers.
+- `enabled` — seven providers ship **disabled** (`github`, `mistral`, `zhipu`, `volcengine`, `longcat`,
+  `nvidia`, `ovh`); turn them on in `providers.<id>.enabled`.
+- Hard gates — a model without `vision: true` is excluded from image requests, `toolCalling: false` from
+  tool requests, and anything whose `contextWindow` is smaller than the estimated prompt size.
+- Cooldowns — a recently failed candidate is parked; the `exclusions` list in the routing record says so
+  explicitly ("cooling down for another Ns after …").
 
-### 4. The model list is short, or the concrete models are missing
+### 6. The profile misbehaves or will not start (the dependency red line)
 
-Note what "empty" can mean here: the six `auto`/`auto:*` virtual routes are advertised whether or
-not discovery succeeds (and, unless you turn `includeFusion` off, so is `fusion`), so a discovery
-failure can never leave the picker blank — you just lose the concrete catalog models.
+**`@deepseek-ai/dsh-*` must never appear in this plugin's `dependencies`.** It ships **zero** runtime
+dependencies, and it does not even import the DSH LLM runtime statically: it resolves
+`@deepseek-ai/dsh-llm` through a guarded dynamic import and falls back to local shims outside DSH. The only
+declared peer is the optional `@deepseek-ai/cordis`.
 
-- Test the discovery endpoint directly:
-  `curl -s "http://localhost:3001/v1/models" -H "Authorization: Bearer freellmapi-<key>"`.
-  If this is empty, the problem is the gateway, not DSH.
-- Is `exposeDiscoveredModels` still `true`? Setting it to `false` deliberately hides every
-  discovered model and leaves only the virtual routes.
-- If discovery needs a key the plugin does not have, it keeps whatever it cached and records the
-  error instead of emptying the picker (and a transient gateway restart does not clear the list
-  for the rest of the session). Check for a `MISSING_CREDENTIAL` first, which surfaces before any
-  request is made.
-- The gateway's catalog sync pulls a signed catalog from `https://api.freellmapi.co` (every 12
-  hours, first run ~10 s after start). A machine with no outbound internet keeps the previous
-  catalog; a **fresh** install with no internet can legitimately have no concrete models. The
-  virtual routes are still listed even then.
-- Use `?available=true` (aliases `?connected=true`, `?ready=true`) or
-  `?execution_status=ready|needsKey|exhausted` to see the difference between "exists in the
-  catalog" and "can serve right now". This is usually why the picker looks thin: the catalog is
-  there, but every key is missing or cooling down.
-- Remember that a free install sees a catalog snapshot that can be up to ~30 days old, so its
-  model list legitimately lags what the upstream providers currently offer.
+Why it matters: DSH supplies its runtime through **filesystem junctions** —
+`$DSH_HOME/profiles/node_modules/<pkg>` points into the `npx` install cache
+(`…\npm-cache\_npx\<hash>\node_modules\…`). A plugin that declares, say, `@deepseek-ai/dsh-llm` as an
+ordinary dependency makes the package manager hoist a **second copy** into
+`profiles/<profile>/node_modules/@deepseek-ai/`, which then wins module resolution. Class identity breaks
+across the copies: `instanceof` fails, error codes silently degrade, and services go missing. The version
+range makes it worse — npm's `@deepseek-ai/dsh-llm` only exists in `0.0.1-rc.x`–`0.1.x`, far below the
+`0.2.0-rc.2` runtime this plugin targets.
 
-### 5. The plugin never appears in the model list
-
-Work down this list:
-
-- **Is it registered as a bundle?** Open `$DSH_HOME/profiles/<profile>/package.json` and check
-  that `dsh.profile.bundles` contains `dsh-freellmapi`. Installed-but-not-listed is the most
-  common cause; DSH loads it as a plain dependency and nothing shows up.
-- **Is the patch actually applied?** A patch row that matches nothing is only a warning, so a
-  typo produces "silently nothing happened". Check the loader entry id and the package name.
-- **Duplicate entry id?** If both the bundle's patch and your profile patch insert
-  `id: freellmapi`, the profile fails to start with `duplicate loader entry id`. Remove your
-  hand-written row (see [Install](#install)).
-- **Does the route lose a naming conflict?** Provider route names are unique per process, and
-  this is the trap most people hit: **the official `setup-dsh` route uses the same name.** It
-  writes `llm-pi-ai.providers.freellmapi`, whose DSH provider name is `freellmapi`, so if you
-  set that up earlier, this plugin's registration is rejected and the plugin refuses to load
-  with a message naming the conflict:
-
-  ```text
-  dsh-freellmapi: cannot register provider route "freellmapi" — provider route "freellmapi" is
-  already owned by another adapter. The FreeLLMAPI documentation's `npx freellmapi setup-dsh`
-  writes an `llm-pi-ai.providers.freellmapi` route; remove that route (or this plugin) so exactly
-  one adapter owns the name.
-  ```
-
-  Remove one of the two routes; they cannot coexist.
-- **Is the `llm` service missing?** Without it the plugin stays inert and logs
-  `the llm service is unavailable; the plugin is inert` — that means the host composition is
-  wrong, not the plugin.
-- **Restart after a manual install.** Bundle composition happens at startup for manually edited
-  profiles.
-- Still stuck? Check the DSH log for the plugin's own error lines; registration failures are
-  reported rather than swallowed. (Model discovery is the one soft failure: if its registration
-  is refused, the provider route still works and you get a warning instead.)
-
-### 6. The whole profile misbehaves or will not start (dependency-shadowing red line)
-
-This is the one failure mode that can take DSH down, so it is worth understanding.
-
-**`@deepseek-ai/dsh-*` must never appear in this plugin's `dependencies`.** This package ships
-**zero** runtime dependencies, and it does not even import the DSH LLM runtime statically: it
-resolves `@deepseek-ai/dsh-llm` through a guarded dynamic import at load time and falls back to
-small local shims when there is none (a bare checkout, a unit test), so the same file loads
-inside a DSH profile and outside it. The only declared peer is the optional
-`@deepseek-ai/cordis`. Why all of this matters:
-
-- **How DSH actually supplies the runtime**: `$DSH_HOME/profiles/node_modules/<package>` is a farm
-  of filesystem **junctions** into the install cache that `npx` created
-  (`…\npm-cache\_npx\<hash>\node_modules\…`). `@deepseek-ai/dsh-llm@0.2.0-rc.2` therefore
-  resolves by walking *up* from the plugin's own directory — and inherits whatever identity that
-  cache copy has.
-- DSH loads its own runtime packages from the application bundle. A plugin that declares, say,
-  `@deepseek-ai/dsh-llm` as an ordinary dependency makes the package manager hoist a **second
-  copy** into `profiles/<profile>/node_modules/@deepseek-ai/`.
-- The profile's `node_modules` wins module resolution, so the plugin would bind to that copy
-  while the rest of DSH keeps using the runtime copy. Class identity then breaks: `instanceof`
-  checks fail **across copies**, error codes silently degrade, and services the plugin expects
-  are missing.
-- The versions make this worse: npm's `@deepseek-ai/dsh-llm` only exists in the `0.0.1-rc.x` –
-  `0.1.x` range, far below the `0.2.0-rc.2` runtime this plugin targets. So the shadowing copy is
-  also an *incompatible* copy.
-
-That second copy is not hypothetical: because the plugin and the DSH process can end up holding
-**different module instances**, this plugin is deliberately written to be *identity-agnostic* —
-it never relies on a cross-copy `instanceof`, `stream()` never throws, and every failure becomes
-in-band `finish` data with a plain `{message, code, status}` object instead of an exception
-crossing the adapter boundary. Declaring the runtime as a dependency would throw all of that away
-for nothing.
-
-**Health check** — two directories tell the whole story:
+Health check — in a healthy profile, the only entries in the *profile's own* scope are `cosmokit` and
+`schemastery`:
 
 ```powershell
-# 1. The runtime supply: junctions into the npx cache (~249 packages). This is normal.
-Get-ChildItem "$env:USERPROFILE\.dsh\profiles\node_modules\@deepseek-ai" |
-  Where-Object { $_.Name -eq 'dsh-llm' } | Select-Object Name, LinkType, Target
-#   Name    LinkType Target
-#   dsh-llm Junction C:\Users\…\npm-cache\_npx\<hash>\node_modules\@deepseek-ai\dsh-llm
-
-# 2. The profile's own scope: healthy means ONLY cosmokit and schemastery.
 Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
 ```
 
-Anything else in the second listing — above all `dsh-llm`, `cordis`, or any `dsh-*` adapter — is a
-leaked dependency that shadows the runtime.
+Anything else (`dsh-llm`, `cordis`, another `dsh-*` adapter) is a leaked dependency. Find the culprit with
+`pnpm why @deepseek-ai/dsh-llm` inside the profile, remove it, reinstall, restart.
 
-**Fix**: find which package pulled it in (`pnpm why @deepseek-ai/dsh-llm` inside the profile),
-remove the offending dependency, reinstall, and restart DSH.
+### 7. `400 model_unavailable` keeps appearing
 
-> Accuracy note: the directory listing above is measured on a real profile. The precise end
-> state of a shadowed install can vary with the DSH build — cross-copy failures, missing
-> services, and in the worst case a profile that refuses to start are all on the table, so
-> never treat "it booted" as proof that the dependency is harmless.
-
-### 7. `400` on a named strategy or profile
-
-- `auto:<name>` where `<name>` is not a chain in your dashboard → upstream `400`, by design.
-  List the real names from `GET /v1/models` (they appear as `auto:<lowercased-name>`) and use
-  exactly that.
-- A `400` can also mean a malformed request body or an unsupported `response_format` for the
-  selected model. Capabilities are **per model**, not per gateway: a model that accepts `tools`
-  may still ignore `response_format`, and vice versa.
-- `409` is not a strategy problem: it means an `Idempotency-Key` was reused with a *different*
-  body. Generate a new key instead of retrying the same one.
-
-## Uninstall
-
-**GUI (recommended).** Plugins manager → `dsh-freellmapi` → remove. The manager runs the
-package-manager removal and updates `dsh.profile.bundles` for you.
-
-**Manual.**
-
-1. Remove `dsh-freellmapi` from `dsh.profile.bundles` and from `dependencies` in
-   `$DSH_HOME/profiles/<profile>/package.json`.
-2. Delete `$DSH_HOME/profiles/<profile>/node_modules/dsh-freellmapi`.
-3. Delete your `- id: freellmapi` override block from the profile's `cordis.patch.yml`, if you
-   added one.
-4. Re-run `dsh plugin --profile desktop install` and restart DSH.
-
-> ⚠️ A `dsh plugin --profile desktop remove dsh-freellmapi` form is a plausible mirror of `add`,
-> but it is **not** confirmed by DSH's own runtime text — prefer the GUI or the manual steps.
-
-Removing the plugin frees the DSH route name `freellmapi`, so the official `setup-dsh` route
-becomes installable again if you want it back — but note that uninstalling the plugin does **not**
-restore a route you removed earlier. Remove the key from the credentials store or from
-`$DSH_HOME/.env` separately if you no longer need it.
-
-## Compatibility
-
-| Component | Supported | Notes |
-|---|---|---|
-| DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; the plugin uses only stable LLM seam APIs (`registerAdapter` / `registerConfigurableProviders` / `registerModelDiscovery`). |
-| Node.js | `>= 22` | Matches the range declared by the reference DSH plugins. |
-| freellmapi gateway | `v0.13.x` (latest at the time of writing: `v0.13.7`) | Protocol surface used: `POST /v1/chat/completions` (SSE), `GET /v1/models`, `X-Routed-Via` & fallback headers, `429 quota_exceeded`. |
-| freellmapi tiers | free and premium | Identical endpoints, auth and streaming; only catalog freshness and the available model set differ. |
-| `dsh-freellmapi` | `0.1.0` | Zero runtime dependencies. The DSH LLM runtime is resolved at load time (local shims as fallback); the only declared peer is the optional `@deepseek-ai/cordis`. |
-
-> Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI
-> package `freellmapi` (which provides `setup-dsh`) is versioned independently (e.g. `0.8.1`).
-> Do not treat the two numbers as the same series.
-
-## Development
-
-```bash
-npm test          # offline test suite — no gateway, no network, no API key required
-```
-
-The suite is deliberately hermetic: it must pass on a clean GitHub runner, so it never contacts
-a real freellmapi service. CI runs the same command on `ubuntu-latest` with Node 22
-(`.github/workflows/ci.yml`) and injects an unreachable `FREELLMAPI_BASE_URL` plus an empty
-`FREELLMAPI_API_KEY`, so an accidental live call fails loudly instead of silently passing.
-
-Repository layout:
-
-```text
-dsh-freellmapi/
-├── package.json              # dsh.bundle.patch + peerDependencies (never dependencies)
-├── cordis.patch.yml          # the loader row this bundle inserts
-├── lib/                      # the shipped plugin code
-├── tests/                    # offline tests
-├── IMPLEMENTATION.md         # implementation notes and design decisions
-├── .github/workflows/ci.yml  # Node 22, offline
-├── README.md                 # English (this file)
-├── README.zh-CN.md           # 中文
-├── CHANGELOG.md              # Keep a Changelog
-└── LICENSE                   # MIT
-```
+That is catalog drift on an aggregator (LLM7 rotates models), not a broken install. It carries the same
+meaning as a `404 model_not_found`: the `(provider, model)` pair is **parked** (starting at the 2-minute
+cooldown step) and the next candidate serves the request. If it happens constantly for one model, remove it
+from that provider's `models` list or set `providers.<id>.enabled: false`.
 
 ## Limitations and unverified claims
 
 Stated plainly, so you know what you are relying on:
 
-1. **No end-to-end run against a real freellmapi gateway.** Every test in this repository runs
-   against an in-process mock gateway, deliberately, so that CI stays offline. The wire details
-   come from freellmapi's own documentation and server source, but the first contact with a real
-   gateway may still reveal framing details this plugin has not seen.
-2. **The mid-stream `stream_error` frame has documentation-level evidence only.** Its exact JSON
-   shape is not pinned down upstream, so the parser recognises the four plausible forms
-   (`type: "stream_error"`, `code: "stream_error"`, `object: "error"`, and a nested `error: {…}`)
-   and treats any error-shaped frame as a terminal failure.
-3. **The image path is not verified against a real attachments service.** Reading attachment bytes
-   goes through `attachments.imageHostPath()`, the only documented way for an adapter to reach
-   them. If that service's shape differs in your build, each affected image degrades to a text
-   placeholder — the request still succeeds, but the model never sees the picture.
-4. **`sessionId` and `purpose` from `GenerateOptions` are not mapped.** Chat Completions has no
-   standard field for either; they are currently dropped rather than smuggled into a custom header.
-5. **`fusion` metadata frames are recognised and skipped, not rendered.** The additive `_fusion`
-   frames cannot break a stream or leak into the answer, but this host-only plugin does not turn
-   them into a progress display.
-6. **No output cap is declared by default** (`maxTokens: 0`), so DSH materialises none and the
-   gateway/upstream model decides. If an upstream default truncates a long answer, set `maxTokens`.
-7. **A `maxTokens` above `Number.MAX_SAFE_INTEGER` is accepted by the config but rejected by DSH.**
-   The field is validated only as a non-negative number, while the runtime requires a *safe*
-   integer for `defaultMaxTokens`; an absurd value such as `1e21` therefore makes `resolveModel()`
-   return metadata DSH refuses with `INVALID_MODEL_MAX_TOKENS`, instead of clamping it silently.
-8. **A `role: "user"` message whose `content` is a plain string is sent empty.** DSH's contract
-   always supplies `ContentBlock[]`, so DSH itself cannot produce that shape; but `lib/wire.js`
-   accepts a string in its own `textOf` helper, so the module is internally inconsistent, and a
-   hand-built message of that shape would reach the gateway with an empty `content` rather than
-   being rejected loudly.
-9. **`includeFusion: false` can be undone by the gateway itself.** The static catalog drops
-   `fusion`, but the gateway's own `GET /v1/models` response lists it, and discovery merges it back
-   in. Turn `exposeDiscoveredModels` off as well if you really want it gone.
-10. **Model discovery can return duplicate ids.** `discover()` passes the gateway's list through
-    unchanged. DSH de-duplicates by endpoint order in its own `discoverModels` step, so duplicates
-    are harmless to the GUI — but a caller reading the raw discovery offer can see them.
+1. **The complexity classifier is a heuristic, not understanding.** It counts tokens, fenced code, tool
+   schemas and vocabulary. [When it gets it wrong](#when-it-gets-it-wrong-and-how-to-override-it) shows
+   three real misjudgements from this implementation. When you know better, pin `auto:simple` /
+   `auto:medium` / `auto:complex`, or pin one `provider/model`.
+2. **No end-to-end run against real providers.** Every test in this repository runs against in-process
+   mock providers, deliberately, so CI stays offline. The only *real* external calls ever made were the
+   maintainer's keyless probe (five requests, four 200s and one 404 documented in
+   `_lead/live-probe-2026-10-13.md`). Everything else — every keyed provider, every quota number, every
+   model id except the keyless ones — is **documentation-level evidence**, not measurement.
+3. **Only the keyless providers were measured at all.** `groq`, `cerebras`, `openrouter`, `github`,
+   `mistral`, `nvidia` and the rest were never contacted (no keys), so their `baseURL`s and model ids come
+   from upstream's registry and migrations. Rate-limit numbers are the 2026-04 baseline and will drift.
+4. **`zhipu` is the riskiest entry in the pool**, and `volcengine` / `longcat` model ids are inferred —
+   all three ship **disabled** with `confidence: 'speculative'`. Enabling them is you accepting that risk.
+   The `zhipu` hostname in particular differs between the mainland and overseas sites and the keys do not
+   interchange: a wrong hostname is a guaranteed 401.
+5. **Free catalogs drift.** The same model id can answer 200 today and `400 model_unavailable` tomorrow.
+   The router treats that as a per-model condition (park + next candidate), so it degrades instead of
+   failing — but it is normal operation, not a bug.
+6. **`stream_error` frame shapes are documentation-level.** Upstream does not pin the JSON shape, so the
+   parser recognises the four plausible forms (`type`, `code`, `object`, nested `error`) and treats any
+   error-shaped frame as terminal.
+7. **The image path is not verified against a real attachments service.** Bytes are read through
+   `attachments.imageHostPath()`, the only documented way for an adapter to reach them, and inlined as
+   `data:` URLs (up to 20 MB each); if that service differs in your build, each affected image degrades to
+   a placeholder text and the request still succeeds. Only two models in the default pool declare
+   `vision: true`.
+8. **`sessionId` / `purpose` from `GenerateOptions` are not mapped** — Chat Completions has no standard
+   field for them.
+9. **Health state is not persisted.** Cooldowns live in the process; after a restart a parked provider is
+   retried once. `HealthTracker` can round-trip its state, but nothing writes it to disk.
+10. **A failed-over answer comes from a different model than the first choice.** When candidate 1 fails,
+    candidate 2 answers, and they are different models. That is safe (nothing was emitted yet) and fully
+    recorded in the routing record's `attempts`, but the answer is not from the top-ranked model.
+11. **`nvidia`'s `parallel_tool_calls: false` requirement is declared but not applied.** The pool entry
+    carries it, but the request body never receives it (the declaration is dropped before it reaches the
+    wire). NVIDIA is disabled by default, so this cannot affect a default install; enable it expecting
+    possible parallel-tool-call rejections.
+12. **`routing.weights` / `routing.thresholds` are advanced fields** with no rendered form in the settings
+    page (they are `z.any()` payloads). Edit them in the profile patch.
+13. **Still open from the v0.1.0 verification round** (re-checked against this implementation):
+    `maxTokens` above `Number.MAX_SAFE_INTEGER` still makes `resolveModel()` return metadata DSH refuses
+    (`INVALID_MODEL_MAX_TOKENS`); a `role: "user"` message whose `content` is a plain string is still sent
+    with empty content; in gateway mode `includeFusion: false` can still be undone by the gateway's own
+    `fusion` entry; and `discover()` can still return duplicate ids (DSH de-duplicates them). `L1` — the
+    incomplete failure-code list — is fixed.
 
-## How the claims in this README were verified
+## Compatibility
 
-So you can tell measured facts from design judgements:
+| Component | Supported | Notes |
+|---|---|---|
+| DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
+| Node.js | `>= 22` | Matches the reference DSH plugins |
+| Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
+| `dsh-freellmapi` | `0.2.0` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; only peer is the optional `@deepseek-ai/cordis` |
+| freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
-- **Measured / sourced from upstream**: the gateway commands and endpoints, `setup-dsh`'s file
-  writes, the `auto:*` strategy table and weights, `X-Routed-Via` and the fallback headers, the
-  `400` / `401` / `409` / `422` / `429` / `502` semantics, the free-vs-premium catalog
-  difference, and the `~34 providers` figure all come from freellmapi's own documentation and
-  source (`docs/en/api/01-rest-api.md`, `docs/en/architecture/*`, `cli/src/tools.ts`,
-  `server/src/routes/proxy.ts`).
-- **Measured / DSH side**: the profile → bundle → loader composition model, the patch formats,
-  the `dsh.bundle.patch` requirement, the settings/credentials/volatile semantics, the
-  `listModels` requirement for GUI selection, and the shadowing health check are taken from the
-  DSH `0.2.0-rc.2` runtime sources. The plugin-manager behaviour (specs accepted, refusal of
-  manifests without `dsh.bundle`) is read from `@deepseek-ai/dsh-plugin-manager`.
-- **Measured / this plugin**: every configuration field, default and probe in
-  [Configuration](#configuration) is read from `lib/config.js`; the log line format, the
-  `X-Routed-Via`/fallback handling and the ring buffer from `lib/routes.js`; the failure codes
-  and the `Retry-After` parsing from `lib/errors.js`; the request mapping and the in-band failure
-  behaviour from `lib/wire.js` and `lib/index.js`. If a field is renamed in a future release,
-  that is a breaking change and will be listed in [CHANGELOG.md](CHANGELOG.md).
-- **Design judgement, not measurement**: that DSH's generic pi-ai `openai-completions` path does
-  not surface upstream response headers to the log — this is inferred from how that adapter is
-  built, and it is the entire reason increment #1 exists. Treat it as a claim to test on your
-  own machine.
-- **Unverified commands** are marked inline with ⚠️, together with the evidence they came from.
+> Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package
+> `freellmapi` (which provides `setup-dsh`) is versioned independently (e.g. `0.8.1`). Do not treat the two
+> numbers as the same series.
+
+## Development
+
+```bash
+npm test          # offline test suite — no network, no provider, no API key required
+```
+
+The suite is hermetic on purpose: it must pass on a clean GitHub runner, so it never contacts a real
+provider. CI runs the same command on `ubuntu-latest` with Node 22 (`.github/workflows/ci.yml`).
+
+```text
+dsh-freellmapi/
+├── lib/
+│   ├── index.js        # plugin entry: apply(), adapter, listModels/resolveModel/stream
+│   ├── config.js       # the config schema and its total normalisation (DEFAULTS is authoritative)
+│   ├── providers.js    # the built-in pool + per-provider overrides + credential resolution
+│   ├── complexity.js   # the classifier: signals, weights, thresholds
+│   ├── router.js       # pure candidate ranking (gates, health, latency, preferred order)
+│   ├── health.js       # cooldowns, failure counts, latency EWMA
+│   ├── dispatch.js     # one provider attempt + the failover loop
+│   ├── wire.js         # GenerateOptions → OpenAI-compatible request
+│   ├── sse.js / frames.js / translate.js   # SSE → DSH StreamChunk
+│   ├── errors.js / routes.js / catalog.js / runtime.js / types.js
+├── tests/              # offline tests (314 of them)
+├── IMPLEMENTATION.md   # design notes, including every deliberate deviation
+├── README.md / README.zh-CN.md / CHANGELOG.md / LICENSE
+└── .github/workflows/ci.yml
+```
 
 ## License
 
 [MIT](LICENSE) © 2026 lion231226
 
-This project is not affiliated with, endorsed by or supported by the freellmapi project or by
-DeepSeek. "freellmapi" is a project of its respective authors; "DeepSeek Harness" and
-`@deepseek-ai/*` are the property of DeepSeek. Use at your own risk — an Auto-routed request
-consumes quota on whichever upstream provider the router selects.
+Not affiliated with, endorsed by or supported by any provider in the pool, the freellmapi project, or
+DeepSeek. Provider names belong to their owners; "DeepSeek Harness" and `@deepseek-ai/*` are DeepSeek's.
+Free tiers have quotas, terms and privacy policies that are yours to comply with — several of them log or
+train on what you send.
