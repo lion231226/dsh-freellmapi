@@ -794,7 +794,7 @@ dsh-freellmapi/
 │   ├── errors.js / routes.js / catalog.js / runtime.js / types.js
 ├── tests/              # 离线测试（314 个）
 ├── IMPLEMENTATION.md   # 设计说明，含每一处刻意偏离
-├── README.md / README.zh-CN.md / CHANGELOG.md / LICENSE
+├── README.md / README-zh.md / CHANGELOG.md / LICENSE
 └── .github/workflows/ci.yml
 ```
 

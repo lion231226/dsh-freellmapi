@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="FreeLLMAPI Router">
+  <!--
+    Original artwork for dsh-freellmapi, authored for this package and covered by
+    its MIT licence (see LICENSE). No third-party assets are embedded, so no
+    further attribution is required. Kept as plain SVG (well under the 256 KiB
+    ceiling) so it renders at any size in the Plugin Manager.
+  -->
+  <title>FreeLLMAPI Router</title>
+  <rect width="64" height="64" rx="14" fill="#0f3d3e"/>
+  <!-- one request in -->
+  <circle cx="14" cy="32" r="6" fill="#ffd166"/>
+  <!-- the routing fan -->
+  <path d="M20 32h12M32 32c8 0 8-16 16-16M32 32h16M32 32c8 0 8 16 16 16"
+        fill="none" stroke="#8fe3d0" stroke-width="4" stroke-linecap="round"/>
+  <!-- three providers out, sized by capability -->
+  <circle cx="52" cy="16" r="5" fill="#ffffff"/>
+  <circle cx="52" cy="32" r="7" fill="#ffffff"/>
+  <circle cx="52" cy="48" r="5" fill="#ffffff"/>
+</svg>

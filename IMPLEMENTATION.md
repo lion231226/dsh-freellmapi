@@ -818,3 +818,107 @@ B. AFTER   declared super=262,144 / ultra=1,000,000
 ```
 
 这个脚本当场抓出一个单测没覆盖的缺陷：`contextOverflowFailure(plan, attempts, minimumContextWindow)` **实参顺序传反**（签名是 `(plan, refusedUpTo, attempts)`），只有在"先真打过一次、再没有更宽的候选"这条路径上才会暴露成 `attempts.map is not a function`。已修，并补了对应的单测。
+
+### 12.18 T22：按官方知识库补齐交付合规（展示元数据是最实质的一条）
+
+前 12 节都是"它能不能正确工作"，这一节是"**它在 Plugin Manager 里看起来对不对**"。0.2 世代把展示信息做成**在不激活插件的前提下读取**的独立交付面：能跑 ≠ 交付完成。
+
+依据（`dsh-plugin-guide` v0.3.33，本机安装）：`guide/plugin-dev-guide.md` §7.0.1（展示元数据与图标）与 §8（规范与质量门禁），清单细则在 `references/official-plugin-dev-skill.md` §3.1。
+
+#### 12.18.1 机械检查：`FAILED (7 passed, 1 failed, 3 warned)` → `OK (10 passed, 0 failed, 1 warned)`
+
+| 检查 | 修前 | 修后 |
+|---|---|---|
+| `manifest-engines`（error） | ✗ `engines.node: ">=22"` | ✓ `"^22.19.0 \|\| >=24.0.0"`（同时允许 Node 22 与 24） |
+| `display-meta`（warning，硬性交付项） | ! 完全没有展示元数据 | ✓ locale meta + 导出的 icon |
+| `manifest-package-manager` | ! 未钉 | ✓ `"pnpm@11.7.0"` |
+| `readme-five-langs` | ! | ! **有意保留**，理由见 §12.18.3 |
+
+#### 12.18.2 展示元数据：§3.1 清单逐条
+
+| 清单条目 | 实现 |
+|---|---|
+| `locale/en.json` 含 `meta.title` / `meta.description` | `locale/en.json`（英文是**必需的 fallback**，检查器会单独校验它） |
+| 按用户语言补 `locale/zh.json` 等 | `locale/zh.json` |
+| 导出 `"./locale/*.json"` | `exports["./locale/*.json"] = "./locale/*.json"` |
+| 导出 `"./icon"` | `exports["./icon"] = "./icon.svg"`（也可在 `package.json` 顶层写 `icon`，我们选子路径导出，与知识库自身一致） |
+| 图标格式 SVG/PNG/JPEG/WebP | SVG，自绘 |
+| 图标 ≤ 256 KiB | **990 字节** |
+| 图标 realpath 必须在包内 | 实文件、非 symlink，realpath 落在包根内（逐项实测） |
+| 图标原创或可再分发 + 署名 | 自绘原创，MIT（与包许可一致）；SVG 内注释写明无第三方素材 |
+| `files` 含 patch、locale、图标与**每个运行时文件** | `npm pack --dry-run` 实测：`lib/` 16 个文件**全部**进包（磁盘 16 = 包内 16，零遗漏），locale 2 + icon 1 + 清单/文档 7 |
+
+`display-meta` 的另一半是"**文件名合规不等于字节能渲染**"，所以图标不是"放个文件就算"：已实跑 XML 解析（`<svg>` 根元素、`viewBox="0 0 64 64"`、11 个子节点、`<title>` 存在），并且 locale 两个文件都真实解析出 `meta.title` / `meta.description`。
+
+**没有加 `dsh.manifestVersion` / `engines.dsh`**：§7.0.1 把两者列为**可选作者字段**（`engines.dsh` 明说"当前不校验，只作声明"），机械检查不查，而随包分发的知识库自身（一个已发布、可用的插件）也没有写。在无法验证宿主是否严格校验 `dsh` 键的情况下新增未验证的清单字段，风险大于收益。用户侧可见的收益为零，所以不加。
+
+#### 12.18.3 五语 README：判断为"家族惯例、非生态硬性要求"，故不补
+
+**判断依据（三条，都可复核）**：
+
+1. 本检查**自己引用的那一节**（§8，检查器输出里逐行标注 `skill: guide/plugin-dev-guide.md §8`）写的硬性口径是**双语**："文档双语：README/文档有 `.zh.md` 成对"。五语不在 §8 里。
+2. `guide/family-toolchain.md` 的 `CC5` 明确把"五语 README"归为**PerryLink 家族三重门**，并且原文写着"**规范明说'这不是生态标准'**"、"非 PerryLink 工作区报 `skip`（`not-applicable`）"。我们不是 PerryLink 工作区。
+3. 检查器自己的分级就是**警告级**：缺英文 `README.md` 才是 `severity: error`；缺 es/pt/hi 是 `severity: warning`。
+
+因此本轮**不新增 es/pt/hi**：§8 要求的双语我们已经满足，机器翻译凑数恰好是本任务禁止的做法，而这三份没有任何人会校对的 README 只会变成三份将来必然漂移的假文档。
+
+**但检查器的这条警告对我们的事实描述是错的，值得记一笔**：它报缺 `README-zh.md`，而我们的中文 README 叫 **`README.zh-CN.md`**——检查器用 `README_LANGS = ['README.md','README-zh.md','README-es.md','README-pt.md','README-hi.md']` 按**文件名**匹配，所以"中文版存在"这件事它看不见。生态惯例（知识库自身、harness 仓库、`guide/links.md`）是 `README-zh.md` 这种**连字符**形式。改名的代价是同步 `README.md:870` 与 `README.zh-CN.md:797` 两处文件树示意 + `package.json` 的 `files`，而本轮红线是"不动 README 正文"。**建议下一轮由文档席位一次改到位**（`git mv README.zh-CN.md README-zh.md` + 上述三处引用），改名后这条警告会从"缺 4 个"变成"缺 3 个"，`readme-consistency` 也会从 `skip` 转为真正比对两份 README 的结构一致性。
+
+> **T22 之后（Lead 已完成该改名）**：`README.zh-CN.md` → `README-zh.md` 已落地，`readme-five-langs` 不再误报缺中文版，`readme-consistency` 从 `skip` 转为**真实运行**。它现在报 `README-zh.md is missing headings: <19 个英文标题>`——这是**按字面比较标题文本**造成的假阳性：两份 README 的结构实测完全一致（h2 19=19、h3 19=19、h4 0=0，共 38 个标题），zh 只是把标题翻译了。这条留给文档席位判断：要么接受（它列出的是英文标题、zh 有对应中文标题），要么把 zh 标题改成"中文 + 英文"双语形式以满足字面比较。
+
+### 12.19 T23：client half —— 在「设置 → 模型」卡片里申请 + 填入 API key
+
+用户选定**方案 A**：在**本插件自己那张 provider 卡片内**，为每个 enabled 却拿不到凭据的家渲染「上方申请链接 + 下方 API key 填入框 + 保存」。保存写回 DSH 的凭据 seam，而 seam 明令 **每个操作重新 resolve、从不跨操作缓存**（`docs/subsystems/credentials.md:5`、`:20`）⇒ **保存后下一次请求即生效，无需重启**。
+
+#### 12.19.1 凭据写回的 API（文档原文引用，非推测）
+
+| 事项 | 出处（文件:行） |
+|---|---|
+| Host 侧服务 `ctx.credentialsController` — `CredentialsController`，"Host service backing the generated `ctx.remote.credentials` namespace" | `references/official-docs/docs/subsystems/credentials.md:229-231` |
+| `@Remote async set(ref: string, value: string): Promise<void>` | 同上 `:245-252` |
+| `@Remote async describe(refs: string[]): Promise<Record<string, CredentialInfo>>` | 同上 `:234-243` |
+| Client 消费方式："declares both `remote` and `remote.<namespace>` in its `inject`, and the call site writes `ctx.remote.<namespace>.<method>(...)`；结果是 `RemoteResult<T>`，用 `if (!result.ok)` 分支" | `references/official-docs/docs/cookbook/adding-a-remote-api.md:109` |
+| 官方页面的实际写法（同一份 API，装在本机的构建产物） | `@deepseek-ai/dsh-client-ui-settings-models/lib/client.js:2784-2790`：`const response = await ctx.remote.credentials.set(ref, value); return response.ok ? void 0 : response.error.message` |
+| 页面自己声明的注入面 | 同上 `lib/types/client/operations.d.ts`："which declares `remote.credentials`, `remote.llm`, and `remote.settings` in its own `inject`" |
+
+因此本插件写的是 `ctx.remote.credentials.set(apiKeyEnv, 字面值)`，读取用 `describe([apiKeyEnv])`；两者都按 `RemoteResult` 分支，**不写防御性 catch**（文档明说 "a Remote call does not reject"），失败时把 `error.message` 原样显示给用户——**失败不静默**。
+
+`inject` 是**静态数组** `['slots', 'locale', 'remote', 'remote.credentials']`。缺 `remote.credentials` 时插件不激活（而不是渲染一个存不进去的输入框）。
+
+#### 12.19.2 落点：`settings.models.provider-card`
+
+| 事项 | 出处 |
+|---|---|
+| `'settings.models.provider-card': { kind: 'keyed', scope: 'root', owner: ProviderCardExtrasOwnerProps }`，"dispatched with `entryKey = settingsNs`" | `@deepseek-ai/dsh-client-ui-settings-models/lib/types/client/slot-contract.d.ts:30-34`、`:56-63` |
+| owner 三个 props：`provider: ProviderDirectoryEntry`（含 `settingsNs`）、`configured`、`keyConfigured` | 同上 `:56-63` |
+| keyed 的登记选项是 `key?: string`（`list` 用 `id`） | `@deepseek-ai/dsh-client-ui-slots/lib/types/index.d.ts:622` |
+| 注册形态 `{ name, key, locale, inject }` + `ctx.slots.inject(owner, () => ctx.slots.register(...))` | `references/official-docs/docs/subsystems/slots.md:103`；本机可运行范例 `dsh-peak-hours/lib/client.js:1511-1557` |
+
+本插件的 `settingsNs` 是 `freellmapi`（`lib/config.js:37`），所以按 `key: 'freellmapi'` 注册即渲染进自己那张卡片。**没有**碰 `conversation.input.model`（那是 `single` + `shadows-shipped-ui`，等于替换 DSH 自带选择器）。
+
+#### 12.19.3 浏览器半边的形态
+
+`lib/client.js` 是客户端模块系统要的 **lazy-CJS factory**（`window.__ModuleLoader__.load({ id, factory })`，见 `docs/subsystems/client-modules.md:80`、`:88`），**零构建、零 npm 依赖**：只 `require('react')` 与 `require('react/jsx-runtime')`——这两个是 shell 自带的种子模块（`dsh-peak-hours/lib/client.js:20-29` 是同一写法）。清单侧加了 `exports["./client"]` 与 `dsh.client.platform = 'web'`。
+
+**没有写 `dsh.client.inject`**：它是**包级**排序边，缺失的包名会让这一行永远不 materialize，而"卡片整块不出现"正是本轮最想避免的失败模式；真正需要的前置条件（`slots`/`locale`/`remote.credentials` 服务）由 cordis 层 `inject` 表达，服务缺失时插件保持不激活而不是渲染坏掉的 UI。本机可用的同作者插件 `dsh-peak-hours` 同样只写 `platform: 'web'`。
+
+样式**全部走 `--dsw-*` token** 且写成 inline style（不注入样式表 = 不在组件外写任何东西）；数值逐条镜像宿主自带的 `ui-primitives` 样式表（输入框 `fields.module.css` 的 `.input`、按钮 `Button.module.css` 的 `.button/.sm/.primary`、卡片材质 `docs/ui-radius.md` §Settings card materials 的 `--dsw-radius-xl` + `--dsw-alias-settings-card-*`；本卡片是卡片内的嵌套编辑器，按该文档用 **R16 / `--dsw-radius-lg`**）。不含任何颜色字面量。**没有 iframe、没有 `document.body`、没有第二个应用根**。
+
+#### 12.19.4 客户端那份 provider 表：生成副本 + 反漂移
+
+浏览器读不到 `lib/providers.js`（客户端模块系统只服务 `exports["./client"]`），所以卡片要的 `{ displayName, apiKeyEnv, keyURL, keyless }` 随包带了一份。为了不重演 T17 的 `KEY_ENTRY_POINTS` 漂移：
+
+- 那一份写在 `lib/client.js` 的 `/* @generated:client-setup:start|end */` 标记内，生成器是 `tests/regenerate-client-setup.mjs`（支持 `--check`）；
+- `tests/client.test.mjs` 的 `★ the client-side provider table is a faithful copy of the Host pool` 逐字段比对 `lib/providers.js` 的 `providerDeclarations()`，并断言 `apiKeyEnv:` 在文件里出现次数恰等于 provider 数（防止有人另写第二份表）；
+- **实跑反证**：只改客户端副本的 `displayName`（不动 `lib/providers.js`）⇒ `--check` 退出码 **1**、`client.test.mjs` 失败 **2** 条且正是那条漂移断言；恢复后 `--check` 退出码 0。
+
+#### 12.19.5 渲染验证（无浏览器）
+
+组件不能靠"代码看起来对"交付：client 组件抛错的表现是**整个 slot 变白**（`guide/unfixed-issues.md` 的 T3 同族）。因此：
+
+1. **无依赖的那条**（永远跑）：用最小 React stub 直接调用组件函数，遍历返回的元素树，断言 3 个 `<a>`（href/target/rel 正确）、3 个 `type="password"` 的 `<input>`、3 个 Save 与 3 个 Show 按钮、链接在文档序里位于输入框**之前**、keyless 家显示"Works without a key"而不是输入框、非本卡返回 `null`、以及 7 组畸形 props 全部不抛。
+2. **真 React 的那条**（本机有 React 时跑，否则 `skip` 并说明原因）：用真实 `react-dom/server` 的 `renderToStaticMarkup` 渲染同一棵树并断言产出的 HTML（链接、`type="password"`、env 名、`<button>Save</button>`、`--dsw-alias-` token、无 `<iframe>`），再用中文词典渲染一次断言 `需要 API key` / `保存` 出现。
+
+**这条真渲染当场抓到一个 stub 看不见的缺陷**：`key` 被当成 props 传给了 `jsxs('div', { key: id, ... })`。React 19 对此**只打印警告**（"A props object containing a "key" prop is being spread into JSX"），不是异常——所以任何只看"抛没抛"的验证都会放过它。已改为 `jsxs('div', props, id)`（key 作第三个实参），并在 stub 里加了**违规记录**：`★ no element smuggles key through props` 现在会在有人写回 `props.key` 时直接失败。修完真渲染 stderr **零警告**。
+
+**诚实边界**：以上证明的是"组件返回的树/HTML 含这些元素且不抛"，**不是**像素级布局。真实浏览器渲染、明暗主题、点击保存的端到端链路（Host 收到 `set` 并写盘）**未验证**——需要一趟装了插件的浏览器会话。这一条如实记在这里，不当作已验证。

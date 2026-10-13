@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "FreeLLMAPI Router",
+    "description": "One `auto` model that scores each request's complexity and routes it across 12 free LLM providers, failing over on 429/5xx. Providers without a key collapse to a single 'add your key' entry, pinning a model is strict, and it answers with zero credentials out of the box."
+  }
+}

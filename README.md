@@ -867,7 +867,7 @@ dsh-freellmapi/
 │   ├── errors.js / routes.js / catalog.js / runtime.js / types.js
 ├── tests/              # offline tests (314 of them)
 ├── IMPLEMENTATION.md   # design notes, including every deliberate deviation
-├── README.md / README.zh-CN.md / CHANGELOG.md / LICENSE
+├── README.md / README-zh.md / CHANGELOG.md / LICENSE
 └── .github/workflows/ci.yml
 ```
 
