@@ -1,0 +1,60 @@
+{
+  "name": "dsh-freellmapi",
+  "version": "0.1.0",
+  "description": "FreeLLMAPI (Auto) provider route for DeepSeek Harness: one `auto` model that lets a local FreeLLMAPI gateway pick the best free model and fail over automatically, streamed back as native DSH chunks.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "IMPLEMENTATION.md",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.mjs\""
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "freellmapi",
+    "llm-adapter",
+    "auto-routing",
+    "openai-compatible",
+    "failover"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lion231226/dsh-freellmapi.git"
+  },
+  "homepage": "https://github.com/lion231226/dsh-freellmapi#readme",
+  "bugs": {
+    "url": "https://github.com/lion231226/dsh-freellmapi/issues"
+  },
+  "author": "lion231226",
+  "license": "MIT"
+}

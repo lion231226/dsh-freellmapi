@@ -1,0 +1,44 @@
+# Dependencies (this package ships zero runtime dependencies; node_modules only
+# ever appears for local tooling and must never be committed).
+node_modules/
+.pnpm-store/
+package-lock.json.bak
+
+# Secrets — never commit a gateway key, a DSH profile .env or local settings.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local DSH state, when someone runs a throwaway profile inside the repo.
+.dsh/
+profiles/
+
+# Logs and diagnostics.
+*.log
+npm-debug.log*
+pnpm-debug.log*
+logs/
+
+# Test / coverage output.
+coverage/
+.nyc_output/
+*.lcov
+
+# Packed artifacts (npm pack / pnpm pack).
+*.tgz
+*.tar.gz
+
+# Editor and OS noise.
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Build scratch space.
+.tmp/
+tmp/

@@ -1,0 +1,16 @@
+# dsh-freellmapi bundle patch: inserts the host-only plugin row into the web
+# profile roster. Applied as a profile bundle layer (the `dsh.bundle.patch`
+# manifest field) over dsh-base.
+#
+# The row is a bare plugin by package name: the node half (exports ".") runs in
+# the host process and registers the single `freellmapi` provider route plus its
+# model discovery offer.
+#
+# The `id` is load-bearing: at DSH 0.1.7+ the Loader entry id IS the settings
+# namespace id (`settingsNs = ctx.fiber.entry?.options.id`), so this literal must
+# stay in sync with the NS fallback in lib/config.js. Never insert a second row
+# with the same id from the profile's own cordis.patch.yml — duplicate loader
+# entry ids abort bundle composition.
+- insert:
+    - id: freellmapi
+      name: 'dsh-freellmapi'
