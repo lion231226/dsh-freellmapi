@@ -40,11 +40,29 @@ test('registration mounts one route, one directory entry and one discovery offer
     provider: 'freellmapi',
     displayName: 'FreeLLMAPI (Auto)',
     settingsNs: 'freellmapi',
-    settingsPath: ['providers', 'freellmapi'],
+    // The empty path is the whole namespace, because this plugin owns exactly one
+    // route. A non-empty path would have to name a real sub-object: the Models
+    // page computes `configured` from `schema.getPath(value, settingsPath)`, so a
+    // path that does not resolve hides the row from the card list and routes it
+    // through "add model provider" instead — where saving writes the path.
+    // `config.providers` is keyed by UPSTREAM provider, so there is deliberately
+    // no `providers.freellmapi` to point at.
+    settingsPath: [],
     declared: true,
   }])
   assert.equal(mounted.settingsNs, 'freellmapi')
   assert.equal(typeof mounted.discovery, 'function')
+})
+
+test('the directory entry points at the namespace root, never at the upstream map', () => {
+  const mounted = mountPlugin({ config: { mode: 'gateway', apiKey: TEST_KEY } })
+  const entry = mounted.directoryEntries[0]
+  // A path under `providers` would name an upstream, and `freellmapi` is not one.
+  assert.equal(entry.settingsPath.includes('providers'), false)
+  assert.deepEqual(entry.settingsPath, [])
+  // The namespace is the loader entry id, which is also the settings namespace the
+  // schema fix in 0.5.0 made resolvable. The two must not drift apart.
+  assert.equal(entry.settingsNs, entry.provider)
 })
 
 test('provider metadata preserves the route id', () => {

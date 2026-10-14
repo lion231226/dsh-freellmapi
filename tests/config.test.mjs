@@ -83,12 +83,19 @@ test('the exported Config is a schemastery schema the settings service will moun
 
   // The Models page resolves a provider row's credential reference as
   // `namespace.value[settingsPath].apiKeyEnv` (`apiKeyEnvOf` in
-  // dsh-client-ui-settings-models), and this plugin declares
-  // `settingsPath: ['providers', 'freellmapi']`. Without `providers` in the
-  // schema the row can never become configurable.
+  // dsh-client-ui-settings-models). This plugin declares `settingsPath: []`, so
+  // that reads the namespace root — which means `apiKeyEnv` itself has to be a
+  // declared, resolvable field rather than something buried in a blob.
+  assert.ok(
+    fields.some(([key]) => key === 'apiKeyEnv'),
+    'the schema must declare `apiKeyEnv` at the root: the Models page reads it there'
+  )
+  // `providers` is the per-upstream override map. It is deliberately an opaque
+  // `dict(any())` so nested values survive validation untouched, but it still has
+  // to be declared for the generated form to show it at all.
   assert.ok(
     fields.some(([key]) => key === 'providers'),
-    'the schema must declare `providers`: the Models page resolves apiKeyEnv under it'
+    'the schema must declare `providers`: it carries the per-upstream overrides'
   )
 })
 

@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.5.1] - 2026-10-14
+
+**The provider now shows up in the Models page.** 0.5.0 fixed why it could not; this release points its
+directory entry at the right place so it is actually listed.
+
+### Fixed
+
+- **The configurable-provider entry declared `settingsPath: ['providers', 'freellmapi']`, which names
+  something that does not exist.** `config.providers` is keyed by **upstream** provider (`groq`,
+  `cerebras`, `kilo`, ...), never by the route this plugin registers, so `schema.getPath(value, path)` was
+  always undefined. The Models page treats an empty path as "the namespace itself" and any other path as a
+  sub-object it must be able to resolve, so the row counted as **not configured**: it was hidden from the
+  card list and offered only through "add model provider" — where pressing Save would have written a junk
+  `providers.freellmapi` entry into the upstream override map. The path is now `[]`.
+
+  That also keeps `removable` false, which is correct: it requires a non-empty path, and a route the plugin
+  owns is not the user's to delete.
+
+### Documented
+
+- **The Models page cannot render an editable form for a third-party provider, and no `settingsPath` can
+  change that.** Its editor picks its fields from `layoutOf(ns)`, which is hard-coded to `llm-deepseek` and
+  `llm-pi-ai` and returns `"unknown"` for every other namespace; an unknown layout renders only "other
+  fields live in cordis.patch.yml" and **disables Save**
+  (`dsh-client-ui-settings-models/lib/client.js:1493-1497`, `:1813-1816`, `:1828`). The provider row is
+  therefore correct and visible, but read-only there — and the hint it shows is the honest one.
+
+  This plugin's editable surface is its **own settings page** (Settings → Plugins → dsh-freellmapi), which
+  is generated from the schema and exists precisely because 0.5.0 made `Config` a real schemastery schema.
+  Two tests now pin the directory entry to the namespace root and assert that the namespace and the route
+  id cannot drift apart.
+
 ## [0.5.0] - 2026-10-14
 
 **The provider was invisible in the Models page while still routing traffic.** 0.4.1 chased the wrong
