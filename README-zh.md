@@ -47,7 +47,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.6.0   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.6.1   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -152,6 +152,49 @@ key 是性价比最高的一步：默认候选池是 `groq`、`cerebras`、`open
 >
 > 完整字段集（含各家上游的 `providers` 映射与路由旋钮）在插件**自己的设置页：设置 → 插件 →
 > dsh-freellmapi**，由 schema 生成；也可以直接编辑 `cordis.patch.yml`。
+>
+> 卡片只为**默认开启**的家提供密钥输入行（`groq`、`cerebras`、`openrouter`、`llm7`、`kilo`）。浏览器
+> 那份表是**构建时**按默认值生成的，所以你自己通过 `providers.<id>.enabled` 打开的家**不会**长出密钥
+> 行——那种情况请直接设置它的 `apiKeyEnv` 并存好凭据。
+
+### 哪些家在你的网络里真的可达
+
+免费额度对地域敏感，而默认开启的两家在某些网络里是**硬封**的。2026-10-14 从中国大陆线路实测，对每家发
+一次**不带凭据**的 `GET {baseURL}/models`：
+
+| Provider | 结果 | 解读 |
+|---|---|---|
+| `groq` | **HTTP 403** | 该网络被封——**封的是 API，不只是网页**。配 key 没有任何用。 |
+| `cerebras` | **HTTP 403** | 同上。 |
+| `openrouter` | HTTP 200，约 0.5s | 可达且快（连测 5/5 全过）。 |
+| `kilo` | HTTP 200 | 可达，免凭据。 |
+| `llm7` | HTTP 200 | 可达，免凭据。 |
+| `ovh` | HTTP 200 | 可达，免凭据。 |
+| `nvidia` | HTTP 200 | 可达；补全仍需 key。 |
+| `github` | HTTP 200 | 可达；需要 token。 |
+| `mistral` | HTTP 401 | 可达，需要 key。 |
+| `zhipu` | HTTP 401 | 可达，需要 key——**注册不需要翻墙**。 |
+| `volcengine` | HTTP 401 | 可达，需要 key（国内控制台）。 |
+| `longcat` | HTTP 401 | 可达，需要 key。 |
+
+`401` 是"要 key 的家"给出的**健康**答复：端点存在、礼貌拒绝。而 `403` 且**不带 Cloudflare 响应头**，
+说明运营方在鉴权之前就拒绝了——那是 IP/地域判定，不是凭据问题；这也解释了为什么网页和 API 同时挂。
+
+所以被封锁的家在你换出口线路之前**不值得配 key**。要让路由器不再为它浪费一次尝试，关掉它即可——全部改动
+就在 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`（或插件自己的 `providers` 字段）：
+
+```yaml
+- id: freellmapi
+  config:
+    providers:
+      groq: { enabled: false }
+      cerebras: { enabled: false }
+```
+
+同日实测可达的申请页（其中三家此前是空的）：`groq` <https://console.groq.com/keys>、
+`cerebras` <https://cloud.cerebras.ai/>、`openrouter` <https://openrouter.ai/keys>、
+`mistral` <https://console.mistral.ai/api-keys>、`zhipu` <https://open.bigmodel.cn/usercenter/apikeys>、
+`volcengine` <https://console.volcengine.com/ark>、`longcat` <https://longcat.chat/platform/api_keys>。
 
 | Provider | `apiKeyEnv` | 申请入口 | 免费额度（上游基线） | 默认 | 备注 |
 |---|---|---|---|---|---|
@@ -780,7 +823,7 @@ providers:
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.6.0` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.6.1` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立

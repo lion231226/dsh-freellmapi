@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.6.1] - 2026-10-14
+
+**Two of the default-enabled providers are hard-blocked from some networks, and the key rows do not cover
+providers you enable yourself.** Both are now documented from measurement rather than assumption.
+
+### Documented
+
+- **Regional reachability, measured.** An unauthenticated `GET {baseURL}/models` against all twelve
+  providers from a mainland-China connection: `groq` and `cerebras` answer **403 — the API, not just the
+  console** — so a key cannot help until traffic leaves through a different route; `openrouter` answers 200
+  in ~0.5 s (5/5 probes); `kilo`, `llm7`, `ovh`, `nvidia` and `github` answer 200; `mistral`, `zhipu`,
+  `volcengine` and `longcat` answer 401, which is the healthy answer from a provider that wants a key.
+
+  The 403 carries **no Cloudflare headers**, which is what distinguishes an operator-level IP/region
+  rejection from a WAF challenge — and it is why the console page and the API fail together. The README now
+  carries the table plus the two-line config that turns a permanently-blocked provider off, since it would
+  otherwise spend an attempt on every request.
+
+- **The key rows follow the pool's default-enabled set.** `lib/client.js` carries a generated copy of the
+  provider table, and `tests/regenerate-client-setup.mjs` filters it to `enabled === true` at build time — so
+  enabling a provider through `providers.<id>.enabled` does **not** produce a key row for it. The README says
+  so, and points at `apiKeyEnv` plus the credentials service for that case. Fixing it properly means letting
+  the browser half read the effective enabled set from the host; that is left as a known gap rather than
+  guessed at.
+
+### Added
+
+- `keyURL` for `zhipu`, `volcengine` and `longcat` — all three were `null`, so enabling any of them produced
+  a key row with no link. Each URL was verified reachable (HTTP 200) before being added.
+
 ## [0.6.0] - 2026-10-14
 
 **The key form is back, and this time there is a row for it to attach to.** Reverts the removal in 0.5.0,

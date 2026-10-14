@@ -49,7 +49,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.6.0   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.6.1   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -160,6 +160,54 @@ convention `<PROVIDER_ID>_API_KEY`. Empty values count as "not configured".
 > The full field set (including the per-upstream `providers` map and the routing knobs) is on the plugin's
 > **own settings page: Settings → Plugins → dsh-freellmapi**, generated from the schema; it is also editable
 > in `cordis.patch.yml`.
+>
+> The card offers a key field for the pool's **default-enabled** providers (`groq`, `cerebras`,
+> `openrouter`, `llm7`, `kilo`). The browser table is generated at build time from those defaults, so a
+> provider you enable yourself through `providers.<id>.enabled` will **not** grow a key row — set its
+> `apiKeyEnv` and store the credential directly in that case.
+
+### Which providers are actually reachable
+
+Free-tier access is region-sensitive, and two of the default-enabled providers are hard-blocked from some
+networks. Measured from a mainland-China connection on 2026-10-14, with an unauthenticated
+`GET {baseURL}/models` per provider:
+
+| Provider | Result | Reading |
+|---|---|---|
+| `groq` | **HTTP 403** | Blocked for this network — **the API, not just the console**. A key changes nothing. |
+| `cerebras` | **HTTP 403** | Same. |
+| `openrouter` | HTTP 200, ~0.5 s | Reachable and fast (5/5 probes). |
+| `kilo` | HTTP 200 | Reachable, keyless. |
+| `llm7` | HTTP 200 | Reachable, keyless. |
+| `ovh` | HTTP 200 | Reachable, keyless. |
+| `nvidia` | HTTP 200 | Reachable; still needs a key for completions. |
+| `github` | HTTP 200 | Reachable; needs a token. |
+| `mistral` | HTTP 401 | Reachable, needs a key. |
+| `zhipu` | HTTP 401 | Reachable, needs a key — registration needs no foreign network. |
+| `volcengine` | HTTP 401 | Reachable, needs a key (mainland console). |
+| `longcat` | HTTP 401 | Reachable, needs a key. |
+
+`401` is the healthy answer from a provider that wants a key: the endpoint exists and refused politely.
+`403` **with no Cloudflare headers** means the operator rejected the request before authentication — an
+IP/region decision, not a credential problem, which is why the console page and the API fail together.
+
+A blocked provider is therefore not worth a key until traffic leaves through a different route. To stop the
+router from spending an attempt on one, turn it off — the whole change, in
+`$DSH_HOME/profiles/<profile>/cordis.patch.yml` (or the plugin's own `providers` field):
+
+```yaml
+- id: freellmapi
+  config:
+    providers:
+      groq: { enabled: false }
+      cerebras: { enabled: false }
+```
+
+Key request pages verified reachable on the same date, including the three that had none before:
+`groq` <https://console.groq.com/keys>, `cerebras` <https://cloud.cerebras.ai/>,
+`openrouter` <https://openrouter.ai/keys>, `mistral` <https://console.mistral.ai/api-keys>,
+`zhipu` <https://open.bigmodel.cn/usercenter/apikeys>, `volcengine` <https://console.volcengine.com/ark>,
+`longcat` <https://longcat.chat/platform/api_keys>.
 
 | Provider | `apiKeyEnv` | Key page | Free tier (upstream baseline) | Default | Notes |
 |---|---|---|---|---|---|
@@ -859,7 +907,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.6.0` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.6.1` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package
