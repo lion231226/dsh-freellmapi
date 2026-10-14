@@ -39,6 +39,7 @@
 - [限制与未验证项](#限制与未验证项)
 - [兼容性](#兼容性)
 - [开发](#开发)
+- [上游与致谢](#上游与致谢)
 - [许可证](#许可证)
 
 ## 快速开始
@@ -47,7 +48,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.6.1   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.6.2   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -823,7 +824,7 @@ providers:
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.6.1` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.6.2` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立
@@ -851,16 +852,35 @@ dsh-freellmapi/
 │   ├── wire.js         # GenerateOptions → OpenAI 兼容请求
 │   ├── sse.js / frames.js / translate.js   # SSE → DSH StreamChunk
 │   ├── errors.js / routes.js / catalog.js / runtime.js / types.js
-├── tests/              # 离线测试（314 个）
+├── tests/              # 离线测试（411 个）
 ├── IMPLEMENTATION.md   # 设计说明，含每一处刻意偏离
-├── README.md / README-zh.md / CHANGELOG.md / LICENSE
+├── README.md / README-zh.md / CHANGELOG.md / NOTICE / LICENSE
 └── .github/workflows/ci.yml
 ```
 
+## 上游与致谢
+
+本插件是 **[freellmapi](https://github.com/tashfeenahmed/freellmapi) 的衍生作品**（Copyright © 2026
+Tashfeen Ahmed，MIT）。把这件事说清楚很重要，因为本 README 此前的版本**只在"gateway 模式可以转发到的
+那个外部网关"这个语境里**提到该项目——读起来像是本插件与它无关。事实不是：
+
+- **`lib/providers.js` 的 provider 目录**转录自 freellmapi 自己的源码——`providers/index.ts`、
+  `server/src/db/migrations/20260101_000000_legacy_baseline.ts`、`docs/en/providers/*`。每个条目都带
+  `source:` 或 `note:` 字段，写明它来自哪个上游文件与行号；那些引用就是这次衍生的溯源记录。
+- **`lib/health.js` 的故障转移与冷却策略**沿用 freellmapi 自己的升级阶梯。
+- **路由模型本身**——给请求打分、按档位选家、跨家故障转移——是 freellmapi 的设计。
+
+**没有**衍生的部分：本包没有内嵌任何上游文件（上游是 TypeScript，本包是纯 JavaScript，两者不共享任何
+文件）；DSH 集成部分——适配器、provider 路由、配置 schema、浏览器半侧——是本包自己按 DSH 插件契约写的。
+`apiKeyEnv` 命名是本包的约定：DSH 按引用名解析凭据，每家都需要一个稳定名字。
+
+上游的 MIT 版权声明与许可原文完整收录在 [`NOTICE`](./NOTICE)，并按许可要求随包分发。
+
 ## 许可证
 
-[MIT](LICENSE) © 2026 lion231226
+[MIT](LICENSE) © 2026 lion231226 —— freellmapi 的衍生作品，详见 [`NOTICE`](./NOTICE)。
 
 与池中任何 provider、与 freellmapi 项目、与 DeepSeek 均无隶属关系，也未获其背书或支持。各 provider
 名称归其所有者；"DeepSeek Harness" 与 `@deepseek-ai/*` 归 DeepSeek。免费档有自己的额度、条款与隐私
-政策，遵守它们是你的责任——其中几家会记录甚至训练你发送的内容。
+政策，遵守它们是你的责任——其中几家会记录甚至训练你发送的内容。上游自述为"personal experimentation
+only"，部署任一项目前请阅读其自身条款。

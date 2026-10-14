@@ -2,6 +2,11 @@ MIT License
 
 Copyright (c) 2026 lion231226
 
+This package is a derived work of **freellmapi** (<https://github.com/tashfeenahmed/freellmapi>,
+Copyright (c) 2026 Tashfeen Ahmed, MIT). Its routing design and provider catalogue were ported from that
+project. The upstream copyright notice and licence text are reproduced in full in [`NOTICE`](./NOTICE),
+which is part of this package and must ship with it.
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

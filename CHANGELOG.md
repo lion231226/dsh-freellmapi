@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.6.2] - 2026-10-14
+
+**Attribution fix. This package is a derived work of [freellmapi](https://github.com/tashfeenahmed/freellmapi)
+and the repository did not say so.**
+
+### Fixed
+
+- **The upstream copyright notice was missing, which the upstream licence requires.** freellmapi is MIT
+  (Copyright © 2026 Tashfeen Ahmed), and the MIT terms state that the copyright notice *and* the permission
+  notice must be included in all copies or substantial portions of the software. This package ports
+  freellmapi's routing design and transcribes its provider catalogue, so it qualifies — yet `LICENSE`
+  carried only this package's own copyright, there was no `NOTICE`, and nothing in the manifest recorded
+  the derivation.
+
+  Added a `NOTICE` file containing the derivation statement and the upstream MIT text **verbatim**, listed
+  it in `package.json#files` so it ships, and pointed `LICENSE` at it.
+
+- **The README framed freellmapi as merely "the external gateway `gateway` mode can forward to"**, which
+  reads as though this plugin were independent of it. Both READMEs now open a dedicated **Upstream and
+  credits** section stating the derivation, naming what was ported (the provider catalogue in
+  `lib/providers.js` with its per-entry `source:`/`note:` citations, the failover ladder in `lib/health.js`,
+  and the routing model itself) and what was not (no upstream file is vendored — upstream is TypeScript,
+  this package is plain JavaScript — and the DSH integration is this package's own).
+
+- Corrected the stale "314 tests" figure in both READMEs' file trees, which had been wrong since 0.3.x.
+
+### Note on scope
+
+Upstream describes itself as "personal experimentation only". That is their statement about their project;
+it is quoted here rather than restated or reinterpreted, and neither README should be read as granting or
+restricting anything beyond the MIT licence.
+
 ## [0.6.1] - 2026-10-14
 
 **Two of the default-enabled providers are hard-blocked from some networks, and the key rows do not cover

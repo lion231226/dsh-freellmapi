@@ -1,0 +1,77 @@
+# Third-party notices
+
+This package is an independent DSH-side implementation, but it is a **derived work** of the project below
+and carries that project's copyright notice as its MIT licence requires.
+
+---
+
+## freellmapi
+
+- Project: **freellmapi** — <https://github.com/tashfeenahmed/freellmapi>
+- Copyright (c) 2026 Tashfeen Ahmed
+- Licence: MIT
+
+### What was derived
+
+`dsh-freellmapi` ports freellmapi's **routing design** and reproduces its **provider catalogue**. In
+concrete terms:
+
+1. **The provider catalogue** (`lib/providers.js`) — provider hosts, model ids, context windows, token
+   limits, keyless behaviour and quota baselines are transcribed from freellmapi's own sources:
+   `providers/index.ts`, `server/src/db/migrations/20260101_000000_legacy_baseline.ts`,
+   `docs/en/providers/*`. Individual entries carry a `source:` or `note:` field naming the exact upstream
+   file and line range they came from; those citations are the provenance record for this derivation.
+2. **The failover and cooldown policy** (`lib/health.js`) — the escalation ladder follows freellmapi's own
+   escalation rather than an independently chosen one.
+3. **The routing model** — the idea of scoring a request and selecting a provider by tier, with
+   automatic failover across providers, is freellmapi's design. This package re-implements it against
+   DSH's `LlmAdapter` seam rather than reusing freellmapi's TypeScript code, which is why no upstream
+   source file is vendored here.
+
+Where this package and upstream disagree, this package's source comments record the divergence and the
+measurement behind it; the upstream values were treated as a baseline, not as ground truth.
+
+### What was **not** derived
+
+- No upstream source file is copied into this package. The upstream project is TypeScript; this package is
+  plain JavaScript and shares no file with it.
+- The DSH integration — the adapter, the provider route, the settings schema, the browser half — is this
+  package's own, written against the DSH plugin contract.
+- `apiKeyEnv` names are this package's own convention, not upstream truth: DSH resolves credentials by
+  reference name, so each provider needed a stable one. See `lib/providers.js`.
+
+### Upstream licence text
+
+The MIT licence requires that the following notice and permission notice be included in all copies or
+substantial portions of the software. It is reproduced here verbatim.
+
+```text
+MIT License
+
+Copyright (c) 2026 Tashfeen Ahmed
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### A note on upstream's own usage statement
+
+Upstream describes itself as **"Personal experimentation only."** That statement is theirs and applies to
+their project; this package does not restate or reinterpret it, and nothing here should be read as a
+grant or a restriction beyond the MIT licence above. Anyone deploying either project should read upstream's
+own terms.

@@ -40,6 +40,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 - [Limitations and unverified claims](#limitations-and-unverified-claims)
 - [Compatibility](#compatibility)
 - [Development](#development)
+- [Upstream and credits](#upstream-and-credits)
 - [License](#license)
 
 ## Quick start
@@ -49,7 +50,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.6.1   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.6.2   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -907,7 +908,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.6.1` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.6.2` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package
@@ -936,17 +937,42 @@ dsh-freellmapi/
 │   ├── wire.js         # GenerateOptions → OpenAI-compatible request
 │   ├── sse.js / frames.js / translate.js   # SSE → DSH StreamChunk
 │   ├── errors.js / routes.js / catalog.js / runtime.js / types.js
-├── tests/              # offline tests (314 of them)
+├── tests/              # offline tests (411 of them)
 ├── IMPLEMENTATION.md   # design notes, including every deliberate deviation
-├── README.md / README-zh.md / CHANGELOG.md / LICENSE
+├── README.md / README-zh.md / CHANGELOG.md / NOTICE / LICENSE
 └── .github/workflows/ci.yml
 ```
 
+## Upstream and credits
+
+This plugin is a **derived work of [freellmapi](https://github.com/tashfeenahmed/freellmapi)**
+(Copyright © 2026 Tashfeen Ahmed, MIT). Saying so plainly matters, because the earlier revisions of this
+README mentioned that project only as "the external gateway `gateway` mode can forward to" — which reads as
+though the plugin were independent of it. It is not:
+
+- **The provider catalogue** in `lib/providers.js` is transcribed from freellmapi's own sources —
+  `providers/index.ts`, `server/src/db/migrations/20260101_000000_legacy_baseline.ts` and
+  `docs/en/providers/*`. Each entry carries a `source:` or `note:` field naming the upstream file and line
+  range it came from; those citations are the provenance record.
+- **The failover/cooldown policy** in `lib/health.js` follows freellmapi's own escalation ladder.
+- **The routing model** — score the request, pick a tier, fail over across providers — is freellmapi's
+  design.
+
+What is *not* derived: no upstream file is vendored here (upstream is TypeScript; this package is plain
+JavaScript and shares no file with it), and the DSH integration — adapter, provider route, settings schema,
+browser half — is this package's own, written against the DSH plugin contract. `apiKeyEnv` names are this
+package's convention, since DSH resolves credentials by reference name and each provider needed a stable
+one.
+
+The upstream MIT notice and licence text are reproduced in full in [`NOTICE`](./NOTICE), which ships with
+the package as its licence requires.
+
 ## License
 
-[MIT](LICENSE) © 2026 lion231226
+[MIT](LICENSE) © 2026 lion231226 — a derived work of freellmapi; see [`NOTICE`](./NOTICE).
 
 Not affiliated with, endorsed by or supported by any provider in the pool, the freellmapi project, or
 DeepSeek. Provider names belong to their owners; "DeepSeek Harness" and `@deepseek-ai/*` are DeepSeek's.
 Free tiers have quotas, terms and privacy policies that are yours to comply with — several of them log or
-train on what you send.
+train on what you send. Upstream describes itself as "personal experimentation only"; read their terms
+before deploying either project.
