@@ -866,9 +866,13 @@ B. AFTER   declared super=262,144 / ultra=1,000,000
 
 > **T22 之后（Lead 已完成该改名）**：`README.zh-CN.md` → `README-zh.md` 已落地，`readme-five-langs` 不再误报缺中文版，`readme-consistency` 从 `skip` 转为**真实运行**。它现在报 `README-zh.md is missing headings: <19 个英文标题>`——这是**按字面比较标题文本**造成的假阳性：两份 README 的结构实测完全一致（h2 19=19、h3 19=19、h4 0=0，共 38 个标题），zh 只是把标题翻译了。这条留给文档席位判断：要么接受（它列出的是英文标题、zh 有对应中文标题），要么把 zh 标题改成"中文 + 英文"双语形式以满足字面比较。
 
-### 12.19 T23：client half —— 在「设置 → 模型」卡片里申请 + 填入 API key
+### 12.19 T23：client half —— **已整体废弃并删除（v0.5.0）**，附真实根因
 
-用户选定**方案 A**：在**本插件自己那张 provider 卡片内**，为每个 enabled 却拿不到凭据的家渲染「上方申请链接 + 下方 API key 填入框 + 保存」。保存写回 DSH 的凭据 seam，而 seam 明令 **每个操作重新 resolve、从不跨操作缓存**（`docs/subsystems/credentials.md:5`、`:20`）⇒ **保存后下一次请求即生效，无需重启**。
+> **本节的结论在 v0.5.0 被推翻。** 下文 12.19.1–12.19.2 保留的 API 事实仍然正确、仍有参考价值；但**方案本身是错的**：`settings.models.provider-card` 不是"注册一张新卡片"的座位，而是 **DSH 已知 provider 行内部的一个附加位**。0.4.0/0.4.1 基于错误前提投入的整套客户端实现（`lib/client.js` 23.7KB + `tests/client.test.mjs` 25.1KB + 生成器）已全部删除。**12.19.3–12.19.5 描述的形态不存在了**，保留于此仅作为"错在哪"的记录；真正的修法见 12.19.6。
+
+用户当初选定**方案 A**：在**本插件自己那张 provider 卡片内**，为每个 enabled 却拿不到凭据的家渲染「上方申请链接 + 下方 API key 填入框 + 保存」。保存写回 DSH 的凭据 seam，而 seam 明令 **每个操作重新 resolve、从不跨操作缓存**（`docs/subsystems/credentials.md:5`、`:20`）⇒ **保存后下一次请求即生效，无需重启**。
+
+**这个目标本身没错，错的是实现位置**。同样的效果由平台自带的 UI 提供——只要本插件的 provider 成为**一等公民行**（见 12.19.6）。
 
 #### 12.19.1 凭据写回的 API（文档原文引用，非推测）
 
@@ -896,29 +900,33 @@ B. AFTER   declared super=262,144 / ultra=1,000,000
 
 本插件的 `settingsNs` 是 `freellmapi`（`lib/config.js:37`），所以按 `key: 'freellmapi'` 注册即渲染进自己那张卡片。**没有**碰 `conversation.input.model`（那是 `single` + `shadows-shipped-ui`，等于替换 DSH 自带选择器）。
 
-#### 12.19.3 浏览器半边的形态
+#### 12.19.6 真实根因与修法（v0.5.0）——「provider 在 UI 里不存在，但仍在路由流量」
 
-`lib/client.js` 是客户端模块系统要的 **lazy-CJS factory**（`window.__ModuleLoader__.load({ id, factory })`，见 `docs/subsystems/client-modules.md:80`、`:88`），**零构建、零 npm 依赖**：只 `require('react')` 与 `require('react/jsx-runtime')`——这两个是 shell 自带的种子模块（`dsh-peak-hours/lib/client.js:20-29` 是同一写法）。清单侧加了 `exports["./client"]` 与 `dsh.client.platform = 'web'`。
+**症状**：重启后「设置 → 模型」里只有 DeepSeek 账号 / DeepSeek 两张卡，没有本插件的；而模型选择器里 `freellmapi/auto` **工作正常**（用户当时正跑在它上面）。
 
-**没有写 `dsh.client.inject`**：它是**包级**排序边，缺失的包名会让这一行永远不 materialize，而"卡片整块不出现"正是本轮最想避免的失败模式；真正需要的前置条件（`slots`/`locale`/`remote.credentials` 服务）由 cordis 层 `inject` 表达，服务缺失时插件保持不激活而不是渲染坏掉的 UI。本机可用的同作者插件 `dsh-peak-hours` 同样只写 `platform: 'web'`。
+**排错过程中被逐一排除的假设**（都验过，都不是原因）：manifest 的 `dsh.client` 缺失 → 补上后卡片仍不出现；`dsh.client.inject` 为空 → 补上（0.4.1）后仍不出现；`cordis.patch.yml` 行说明符不是裸包名 → 是裸包名，与可用插件同构；client 注册定义形状错误 → 用假 `window.__ModuleLoader__` 抓下来比对，`{id, factory}` 与 `dsh-peak-hours`、`dsh-skill-hub` **完全同构**；槽名拼错 → `settings.models.provider-card` 确实是官方槽树的具名槽（`docs/subsystems/slots.md:134`）。
 
-样式**全部走 `--dsw-*` token** 且写成 inline style（不注入样式表 = 不在组件外写任何东西）；数值逐条镜像宿主自带的 `ui-primitives` 样式表（输入框 `fields.module.css` 的 `.input`、按钮 `Button.module.css` 的 `.button/.sm/.primary`、卡片材质 `docs/ui-radius.md` §Settings card materials 的 `--dsw-radius-xl` + `--dsw-alias-settings-card-*`；本卡片是卡片内的嵌套编辑器，按该文档用 **R16 / `--dsw-radius-lg`**）。不含任何颜色字面量。**没有 iframe、没有 `document.body`、没有第二个应用根**。
+**真正原因**：`Config` **静默降级成了普通对象**。
 
-#### 12.19.4 客户端那份 provider 表：生成副本 + 反漂移
+1. `lib/config.js` 原本用**受保护的动态** `import('@deepseek-ai/schemastery')` 构建 schema，任何失败都回退成"普通 Standard Schema 对象"（旧注释还把这个回退写成 *a supported, silent degradation*）。
+2. profile 安装把本包 **`link:`** 进 `node_modules`，而 Node 的 ESM 按 **realpath** 解析裸包名 ⇒ 该 import 实际在**本包自己的目录**里跑，永远到不了 profile 的 `node_modules` ⇒ `ERR_MODULE_NOT_FOUND` ⇒ 走回退。**实测**：从本包目录 import ⇒ `ERR_MODULE_NOT_FOUND`；从 profile 目录 import ⇒ 成功。
+3. `dsh-settings` 跳过任何 `Config` 没有 `toJSON()` 的条目（`dsh-settings/lib/index.js:538-541`）⇒ **本插件没有 settings 命名空间**。
+4. 「设置 → 模型」的行来自 `joinProviderDirectory(listProviders(), listConfigurableProviders())`（`dsh-client-ui-settings-models/lib/client.js:1009-1030`）。`listProviders()` 来自 adapter 注册（本插件**有**，所以能路由）；`listConfigurableProviders()` 来自 `ctx.llm.registerConfigurableProviders()`（本插件**也早就调了**，`lib/index.js:1191`）。
+5. 但页面按 `entry.settingsNs` 取命名空间：`namespaces.get(row.entry.settingsNs)`。命名空间不存在 ⇒ `configured: false` ⇒ **不画成卡片**（L2125 `configured.map(...)`）；同时 `addable` 要求命名空间存在（L2073）⇒ **也不在「+ 添加模型提供商」里**。**落进死区**。
 
-浏览器读不到 `lib/providers.js`（客户端模块系统只服务 `exports["./client"]`），所以卡片要的 `{ displayName, apiKeyEnv, keyURL, keyless }` 随包带了一份。为了不重演 T17 的 `KEY_ENTRY_POINTS` 漂移：
+**死区是最坏的失败形态**：`providerUsable` 对 `apiKeyEnv === undefined` 的行返回 `true`（L1094）⇒ 页面认为已有可用 provider、不再引导；而该 provider 在 UI 里**任何地方都不出现**。没有报错、没有日志、没有 recovery 快照——因为它根本没失败，只是被静默跳过。
 
-- 那一份写在 `lib/client.js` 的 `/* @generated:client-setup:start|end */` 标记内，生成器是 `tests/regenerate-client-setup.mjs`（支持 `--check`）；
-- `tests/client.test.mjs` 的 `★ the client-side provider table is a faithful copy of the Host pool` 逐字段比对 `lib/providers.js` 的 `providerDeclarations()`，并断言 `apiKeyEnv:` 在文件里出现次数恰等于 provider 数（防止有人另写第二份表）；
-- **实跑反证**：只改客户端副本的 `displayName`（不动 `lib/providers.js`）⇒ `--check` 退出码 **1**、`client.test.mjs` 失败 **2** 条且正是那条漂移断言；恢复后 `--check` 退出码 0。
+**修法（v0.5.0）**：
 
-#### 12.19.5 渲染验证（无浏览器）
+- `lib/config.js` 改为**静态** `import Schema from '@deepseek-ai/schemastery'`，导出 `Schema.object({...}).loose()`，**取消一切回退**。依据 `guide/plugin-dev-guide.md` §3.6：**不能用普通对象当 `Config`**，且"非法配置**响亮失败**，绝不明吞"。
+- 按 `family-toolchain.md` R5 把 `@deepseek-ai/schemastery` 同时声明进 **`peerDependencies` 与 `devDependencies`**（R5 原文要求两处都要）。那是当初**故意违反**该规则的地方，也正是它坏掉的原因。
+- 包内 `pnpm install`（提交 `pnpm-lock.yaml`），使 `link:` 安装时静态 import 能从本包自己的树解析。
+- **删除客户端半侧**：平台自带编辑器已经覆盖"填密钥"，且凭据走 credentials 服务。保留客户端 = 白担 bundle 格式、激活顺序、槽契约三重风险。
 
-组件不能靠"代码看起来对"交付：client 组件抛错的表现是**整个 slot 变白**（`guide/unfixed-issues.md` 的 T3 同族）。因此：
+**验证（从 profile 经符号链接实测）**：`configSchemaKind` 由 `plain` → **`schemastery`**，`Config.toJSON` 可用、`Config.type === 'object'`、`dict` 20 字段且 **20/20 带 `meta.volatile`** ⇒ `settings.schema(entry)` 返回 schema、`volatileForm(schema)` 返回 form ⇒ **命名空间会建立** ⇒ provider 行进入 `addable`，出现在「+ 添加模型提供商」中，配好即渲染为卡片。
 
-1. **无依赖的那条**（永远跑）：用最小 React stub 直接调用组件函数，遍历返回的元素树，断言 3 个 `<a>`（href/target/rel 正确）、3 个 `type="password"` 的 `<input>`、3 个 Save 与 3 个 Show 按钮、链接在文档序里位于输入框**之前**、keyless 家显示"Works without a key"而不是输入框、非本卡返回 `null`、以及 7 组畸形 props 全部不抛。
-2. **真 React 的那条**（本机有 React 时跑，否则 `skip` 并说明原因）：用真实 `react-dom/server` 的 `renderToStaticMarkup` 渲染同一棵树并断言产出的 HTML（链接、`type="password"`、env 名、`<button>Save</button>`、`--dsw-alias-` token、无 `<iframe>`），再用中文词典渲染一次断言 `需要 API key` / `保存` 出现。
+**防回归**：`tests/config.test.mjs` 的旧断言在 `configSchemaKind !== 'schemastery'` 时**直接 return**——所以它在整个 bug 期间一直"通过"。现已改为**断言而非跳过**，并且把 schema 与消费方契约绑定：必须声明 `providers`（因为 `apiKeyEnvOf` 读的是 `namespace.value[settingsPath].apiKeyEnv`，而本插件声明 `settingsPath: ['providers', 'freellmapi']`）。
 
-**这条真渲染当场抓到一个 stub 看不见的缺陷**：`key` 被当成 props 传给了 `jsxs('div', { key: id, ... })`。React 19 对此**只打印警告**（"A props object containing a "key" prop is being spread into JSX"），不是异常——所以任何只看"抛没抛"的验证都会放过它。已改为 `jsxs('div', props, id)`（key 作第三个实参），并在 stub 里加了**违规记录**：`★ no element smuggles key through props` 现在会在有人写回 `props.key` 时直接失败。修完真渲染 stderr **零警告**。
+**方法论教训**：把一个必然失败的条件写成"优雅降级"，等于把 bug 藏进成功路径。这条回退当初是**主动设计**的（旧注释明写 *supported, silent degradation*），而且当时的自测只断言"有 `~standard.validate`"——恰好是回退分支也满足的条件。**能降级的分支必须有人为它的降级负责**：要么响亮失败，要么在降级时留下可观测证据。
 
 **诚实边界**：以上证明的是"组件返回的树/HTML 含这些元素且不抛"，**不是**像素级布局。真实浏览器渲染、明暗主题、点击保存的端到端链路（Host 收到 `set` 并写盘）**未验证**——需要一趟装了插件的浏览器会话。这一条如实记在这里，不当作已验证。
