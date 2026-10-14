@@ -9,6 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.4.1] - 2026-10-14
+
+**The settings card shipped in 0.4.0 never appeared.** No error, no log, no card — the client half was
+loading and calling `slots.inject()` on a slot that did not exist yet.
+
+### Fixed
+
+- **`dsh.client.inject` was empty, so the browser half could activate before the slot it registers into.**
+  `docs/subsystems/slots.md` states the rule plainly: *a child slot exists only when its named parent entry
+  is mounted*. `settings.models.provider-card` sits under `settings.section` → `sidebar.settings`, so a half
+  with no ordering edge can reach `slots.inject()` before the settings package has mounted that subtree —
+  and registering into a slot that does not exist is a **silent no-op**. The official settings-card cookbook
+  declares this edge (`"inject": ["@deepseek-ai/dsh-client-ui-settings"]`) and every working settings-card
+  plugin carries it; this one declared `platform` alone. The manifest now orders activation after
+  `@deepseek-ai/dsh-client-ui-settings` (the slot owner), `@deepseek-ai/dsh-client-locale` (the dictionary
+  face) and `@deepseek-ai/dsh-client-connection` (the Remote credential face).
+- **The test suite could not have caught it.** `client.test.mjs` asserted the *plugin's* cordis `inject`
+  was a static array, but never the *manifest's* `dsh.client.inject` — the field that actually decides
+  activation order. A new test reads `package.json`, rejects the documented function-form trap
+  (`cordis` would declare zero dependencies and `apply()` would throw on the first service it touches),
+  and maps each service the half reaches for to the package that provides it, so the two inject
+  declarations can no longer drift apart. Verified by reverse injection: removing the manifest edge fails
+  the test.
+
+### Added
+
+- The `settings.models.footer` and `settings.models.provider-card` slot names, plus the parent-mount rule,
+  are now cited in `lib/client.js` next to the registration so the constraint is visible where it applies.
+
+## [0.4.0] - 2026-10-14
+
+**Provider keys can be pasted in place instead of exported into the shell.**
+
+### Added
+
+- **A browser half and a settings card.** Each provider without usable credentials gets a
+  `settings.models.provider-card` entry showing where to get a key (with a link), which environment
+  variable name the key is stored under, and a password field with an explicit save. Values are written
+  through `ctx.remote.credentials.set()`, so they land in DSH's credential service — the first source the
+  host-side key resolution consults, and one it reads without caching, so **a saved key takes effect
+  without a restart**.
+- Localized card text (`en`, `zh`) registered through `ctx.locale.register`, and a package icon.
+
+### Changed
+
+- Provider setup rows are guidance, not models: they never appear as selectable models and cannot be
+  accidentally pinned.
+
 ## [0.3.1] - 2026-10-14
 
 **A wrong context window was doing damage in both directions** — this release follows a real session that

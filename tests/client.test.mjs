@@ -147,6 +147,60 @@ test('the client half exports a static inject array naming the services it needs
   assert.equal(typeof exports.apply, 'function')
 })
 
+/**
+ * The manifest's `dsh.client.inject` is *activation ordering*, not cordis
+ * injection, and it is the field that decides whether the settings slot exists
+ * by the time `apply()` reaches for it.
+ *
+ * `docs/subsystems/slots.md` is explicit: "a child slot exists only when its
+ * named parent entry is mounted". `settings.models.provider-card` sits under
+ * `settings.section` -> `sidebar.settings`, so a half that activates before the
+ * settings package mounts that subtree calls `slots.inject()` on a slot that
+ * does not exist yet — a silent no-op with no error, no log, and no card.
+ *
+ * The official settings-card cookbook declares this edge
+ * (`"inject": ["@deepseek-ai/dsh-client-ui-settings"]`), and every installed
+ * plugin that contributes a settings card carries it. This half shipped v0.4.0
+ * with `platform` alone, and the card never appeared.
+ *
+ * Each service `apply()` touches maps to the package that provides it, so the
+ * two inject declarations cannot drift apart again.
+ */
+test('the manifest orders activation after every service the half touches', async () => {
+  const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
+  const { exports } = await loadClientHalf()
+
+  assert.equal(manifest.dsh.client.platform, 'web')
+
+  const ordering = manifest.dsh.client.inject
+  assert.ok(ordering !== undefined, 'dsh.client must declare inject; without it the half can activate before its slot exists')
+  // A function here is the documented 0.2.0 trap: cordis declares zero
+  // dependencies and `apply()` throws on the first service it reaches for.
+  assert.ok(Array.isArray(ordering), 'dsh.client.inject must be a static array, never a function')
+  assert.ok(ordering.length > 0, 'a half that registers into a slot cannot declare zero ordering edges')
+
+  for (const edge of ordering) {
+    assert.match(edge, /^@deepseek-ai\/dsh-client-/, `ordering edges name client packages, got ${edge}`)
+  }
+
+  // The service -> package map is the load-bearing assertion: a service the
+  // half reaches for with no ordering edge behind it is the v0.4.0 bug.
+  const providerOf = {
+    slots: '@deepseek-ai/dsh-client-ui-settings',
+    locale: '@deepseek-ai/dsh-client-locale',
+    remote: '@deepseek-ai/dsh-client-connection',
+    'remote.credentials': '@deepseek-ai/dsh-client-connection'
+  }
+  for (const service of exports.inject) {
+    const provider = providerOf[service]
+    assert.ok(provider !== undefined, `no client package is mapped to the "${service}" service`)
+    assert.ok(
+      ordering.includes(provider),
+      `apply() reaches for "${service}" but the manifest does not order activation after ${provider}`
+    )
+  }
+})
+
 test('the client half requires nothing but the shell-seeded modules', async () => {
   const source = readFileSync('lib/client.js', 'utf8')
   const requested = [...source.matchAll(/require\((['"`])([^'"`]+)\1\)/g)].map((match) => match[2])

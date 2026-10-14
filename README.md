@@ -49,7 +49,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.3.1   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.4.1   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -836,7 +836,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.3.1` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; only peer is the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.4.1` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; only peer is the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package
