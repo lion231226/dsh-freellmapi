@@ -49,7 +49,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.4.1   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.5.0   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -482,10 +482,14 @@ Every field is **live** (a settings edit applies to the next request, no restart
 | `taskType` | `''` \| `auto` \| `code` \| `chat` | `''` | Gateway mode: optional `X-FreeLLM-Task-Type` hint (empty sends no header) |
 | `cacheMode` | `''` \| `on` \| `off` | `''` | Gateway mode: optional `X-FreeLLM-Cache` switch (empty sends no header) |
 
-> The settings form is generated when the host resolves `@deepseek-ai/schemastery` (it normally does in
-> a DSH profile). If it does not, the plugin still loads and runs with exactly these defaults — you just
-> configure it through the profile patch instead. No configuration value, however malformed, can stop
-> the plugin from loading.
+> The schema is a static import of `@deepseek-ai/schemastery`, declared in both `peerDependencies` and
+> `devDependencies`. There is **no fallback**: if the schema builder cannot be resolved the plugin fails
+> loudly at load rather than degrading. That matters because the degradation is invisible downstream — a
+> plugin whose `Config` lacks `toJSON()` gets no settings namespace, and the Models page then shows its
+> provider *nowhere* while it keeps routing traffic. `pnpm install` in this package during development so
+> a `link:`-ed install resolves the builder from its own tree.
+>
+> No configuration value, however malformed, can stop the plugin from loading.
 
 One environment escape hatch worth knowing: **`FREELLMAPI_BASE_URL`** overrides the gateway endpoint from
 the environment, and it is honoured **only while `baseURL` still holds its built-in default**, so an
@@ -836,7 +840,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.4.1` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; only peer is the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.5.0` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package

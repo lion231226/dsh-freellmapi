@@ -2,8 +2,13 @@
  * Configuration resilience tests.
  *
  * The contract under test is negative: *no* configuration value — however
- * malformed — may throw, and the fallback schema must satisfy Cordis' Standard
- * Schema call shape (`Config['~standard'].validate(value)` → `{value}`).
+ * malformed — may throw, and `Config` must speak Cordis' Standard Schema call
+ * shape (`Config['~standard'].validate(value)` → `{value}`).
+ *
+ * It must also be a *live schemastery schema*, not a plain object: `dsh-settings`
+ * skips an entry without `toJSON()`, and an entry with no settings namespace
+ * leaves this plugin's provider invisible in the Models page while it keeps
+ * routing. The schema assertions below are the regression guard for that.
  */
 
 import assert from 'node:assert/strict'
@@ -19,8 +24,8 @@ test('the exported Config speaks the Standard Schema protocol Cordis calls', () 
   const result = standard.validate({ baseURL: 'http://localhost:3001/v1' })
   assert.equal(typeof result.then, 'undefined', 'validation must be synchronous')
   assert.equal(result.issues, undefined)
-  // Fields may arrive either as plain values (fallback schema) or as schemastery
-  // `Volatile` references (`.volatile()` fields); both must normalise identically.
+  // Validated fields arrive as schemastery `Volatile` references (every field is
+  // `.volatile()`), so `normalizeConfig` is what turns them into plain values.
   assert.equal(normalizeConfig(result.value).baseURL, 'http://localhost:3001/v1')
 })
 
@@ -43,23 +48,48 @@ test('no configuration value can make the schema report an issue', () => {
   }
 })
 
-test('configSchemaKind reports which schema the host could support', () => {
-  assert.ok(['schemastery', 'plain'].includes(configSchemaKind))
+test('configSchemaKind is always schemastery', () => {
+  // It used to report which branch a guarded dynamic import took. That branch no
+  // longer exists; keeping the field lets a stale profile surface the difference.
+  assert.equal(configSchemaKind, 'schemastery')
 })
 
-test('a schemastery schema exposes what the settings service needs', () => {
-  // dsh-settings skips an entry whose Config lacks `toJSON()`, and builds the form
-  // from `volatileForm(schema)` — so a live, volatile object schema is the whole
-  // difference between "editable in the GUI" and "patch file only".
-  if (configSchemaKind !== 'schemastery') return
-  assert.equal(typeof Config.toJSON, 'function')
+test('the exported Config is a schemastery schema the settings service will mount', () => {
+  // The regression guard for a bug that hid for hours: the schema was built by a
+  // guarded dynamic `import()`, and when that import failed — a `link:`-ed
+  // install resolves bare specifiers from its realpath, not the profile — it
+  // silently degraded to a plain object.
+  //
+  // The degradation is not local. `dsh-settings` skips an entry without
+  // `toJSON()` (`dsh-settings/lib/index.js:538-541`), so the entry gets no
+  // namespace; the Models page then cannot resolve one for this plugin's
+  // provider, which makes the provider invisible in the UI while it keeps routing
+  // traffic. Nothing logs and nothing throws.
+  //
+  // The earlier revision of this test returned early when the kind was not
+  // `schemastery`, so it passed throughout the entire bug. Assert, never skip.
+  assert.equal(typeof Config.toJSON, 'function', 'settings.schema(entry) requires "toJSON" in schema')
+
+  // `volatileForm(schema)` reads the *live* schema: it needs `type === 'object'`
+  // and at least one child whose `meta.volatile` is true, or it returns undefined
+  // and the entry is skipped anyway.
   assert.equal(Config.type, 'object')
-  const fields = Object.values(Config.dict ?? {})
-  assert.equal(fields.length, 16)
-  for (const field of fields) {
-    assert.equal(field.meta.volatile, true, 'every field must be volatile')
-    assert.equal(typeof field.meta.description, 'string')
+  const fields = Object.entries(Config.dict ?? {})
+  assert.ok(fields.length > 0, 'the generated form needs at least one volatile field')
+  for (const [key, field] of fields) {
+    assert.equal(field.meta.volatile, true, `field "${key}" must be volatile so an edit re-resolves in place`)
+    assert.equal(typeof field.meta.description, 'string', `field "${key}" must carry a description for the form`)
   }
+
+  // The Models page resolves a provider row's credential reference as
+  // `namespace.value[settingsPath].apiKeyEnv` (`apiKeyEnvOf` in
+  // dsh-client-ui-settings-models), and this plugin declares
+  // `settingsPath: ['providers', 'freellmapi']`. Without `providers` in the
+  // schema the row can never become configurable.
+  assert.ok(
+    fields.some(([key]) => key === 'providers'),
+    'the schema must declare `providers`: the Models page resolves apiKeyEnv under it'
+  )
 })
 
 test('an absent configuration yields the documented defaults', () => {

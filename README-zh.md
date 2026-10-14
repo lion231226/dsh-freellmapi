@@ -47,7 +47,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.4.1   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.5.0   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -482,8 +482,8 @@ mode: gateway            # 默认是 "direct"；gateway 还需要 baseURL 与一
 
 ### 设置它们的三种方式
 
-1. **设置页** —— **设置 → 插件 → dsh-freellmapi**（所有顶层字段；当宿主能解析到
-   `@deepseek-ai/schemastery` 时会生成表单，DSH profile 里通常都能）。
+1. **设置页** —— **设置 → 插件 → dsh-freellmapi**（所有顶层字段；表单由静态导入的
+   `@deepseek-ai/schemastery` 生成，该包同时声明在 `peerDependencies` 与 `devDependencies`）。
 2. **profile patch** —— `$DSH_HOME/profiles/<profile>/cordis.patch.yml`，`providers` 与 `routing`
    推荐写在这里：
 
@@ -764,7 +764,7 @@ providers:
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.4.1` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；唯一 peer 是可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.5.0` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立

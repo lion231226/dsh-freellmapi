@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.5.0] - 2026-10-14
+
+**The provider was invisible in the Models page while still routing traffic.** 0.4.1 chased the wrong
+cause; this release fixes the real one and deletes the feature that was never needed.
+
+### Fixed
+
+- **`Config` silently degraded from a schemastery schema to a plain object**, which cost this plugin its
+  settings namespace entirely. The schema used to be built by a *guarded* dynamic
+  `import('@deepseek-ai/schemastery')` that fell back to a plain Standard Schema object on any failure.
+  A profile install `link:`s this package into the profile, and Node resolves bare specifiers from a
+  module's **realpath** — so the import ran against this package's own directory, never the profile's,
+  got `ERR_MODULE_NOT_FOUND`, and quietly took the fallback.
+
+  The consequence was not local and not visible. `dsh-settings` skips any entry whose `Config` lacks
+  `toJSON()` (`dsh-settings/lib/index.js:538-541`), so the plugin got **no settings namespace**. The
+  Models page builds its rows from `joinProviderDirectory(listProviders(), listConfigurableProviders())`
+  and resolves a row's namespace by `settingsNs`; with no namespace the row is neither `configured`
+  (so it is not drawn as a card) nor `addable` (so it is not offered under "add model provider"). The
+  provider landed in a **dead zone — absent from the UI, working on the wire**, which is the worst
+  failure shape available because everything appears to be fine.
+
+  `Config` is now a static-import schemastery schema with no fallback at all, per
+  `guide/plugin-dev-guide.md` §3.6 (*a plain object is not an acceptable `Config`; an unusable schema
+  must fail loud*). `@deepseek-ai/schemastery` is declared in **`peerDependencies` and
+  `devDependencies`** as `family-toolchain.md` R5 requires — the opportunistic import was a deliberate
+  deviation from that rule and it is what broke.
+- **The schema test could not have caught it.** It returned early when `configSchemaKind` was not
+  `schemastery` — so it passed for the entire life of the bug. It now asserts, and additionally ties the
+  schema to the consumer contract: `providers` must be declared, because the Models page reads a row's
+  credential reference as `namespace.value[settingsPath].apiKeyEnv` and this plugin declares
+  `settingsPath: ['providers', 'freellmapi']`.
+
+### Removed
+
+- **The browser half (`lib/client.js`), the `dsh.client` manifest block and the `./client` export.**
+  0.4.0/0.4.1 assumed `settings.models.provider-card` was a seat for introducing a new provider card. It
+  is not: it is an add-on *inside a row DSH already knows about*, and the card list renders only rows
+  whose namespace resolved. The platform already has this UI — a configurable provider row gets the
+  built-in editor and the credential indicator from the schema alone. With the schema fixed, the
+  provider appears under "add model provider" and DSH's own editor stores the key through the credentials
+  service, so ~25 KB of client code and its whole risk surface (bundle format, activation ordering, slot
+  contracts) are gone.
+
+### Added
+
+- `@deepseek-ai/schemastery` in `devDependencies`, and `pnpm install` in this package for local
+  development, so a `link:`-ed install resolves the schema builder from the package's own tree.
+
 ## [0.4.1] - 2026-10-14
 
 **The settings card shipped in 0.4.0 never appeared.** No error, no log, no card — the client half was
