@@ -49,7 +49,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.5.1   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.6.0   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -142,15 +142,24 @@ credentials service, which is the first thing resolution consults. Resolution or
 credentials service → `config.providers[id].apiKey` → environment variable named by `apiKeyEnv` → the
 convention `<PROVIDER_ID>_API_KEY`. Empty values count as "not configured".
 
-> **Where to edit in the GUI.** The **Models** page lists this plugin's provider route (FreeLLMAPI), but its
-> editor cannot render fields for a third-party provider: it picks its layout from a hard-coded list of two
-> shipped namespaces and disables Save for anything else, so it shows "other fields live in
-> `cordis.patch.yml`" instead. This is a current limitation of the host, not a setting you can change here.
+> **Where to edit in the GUI.** **Settings → Models** lists this plugin's provider route (*FreeLLMAPI*) as
+> an ordinary card, and the key rows render **inside that card** — one per upstream that is enabled but has
+> no usable credential, each with a link to its key page, the environment-variable name it will be stored
+> under, a password field and Save. Saving writes through DSH's credentials service, which is read without
+> caching, so **the key takes effect on the next request with no restart**.
 >
-> The editable surface is this plugin's **own settings page: Settings → Plugins → dsh-freellmapi**, which is
-> generated from the schema. Per-upstream keys live under the `providers` field there and in
-> `cordis.patch.yml`; store the key itself through the credentials service (or the environment), and put only
-> its **reference name** in `apiKeyEnv`.
+> Two notes on the host's own editor, so its behaviour is not mistaken for a bug:
+>
+> - The **编辑** button next to that card opens DSH's provider editor, which can only render fields for its
+>   own two provider families (`llm-deepseek`, `llm-pi-ai`); for any other namespace it shows "other fields
+>   live in `cordis.patch.yml`" and disables Save. That is a current host limitation and the key rows above
+>   are the answer to it.
+> - The card shows a **missing-credential dot** while the root `apiKeyEnv` (`FREELLMAPI_API_KEY`) is unset.
+>   Direct mode needs no such key — the dot refers to the optional gateway credential and can be ignored.
+>
+> The full field set (including the per-upstream `providers` map and the routing knobs) is on the plugin's
+> **own settings page: Settings → Plugins → dsh-freellmapi**, generated from the schema; it is also editable
+> in `cordis.patch.yml`.
 
 | Provider | `apiKeyEnv` | Key page | Free tier (upstream baseline) | Default | Notes |
 |---|---|---|---|---|---|
@@ -850,7 +859,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.5.1` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.6.0` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package

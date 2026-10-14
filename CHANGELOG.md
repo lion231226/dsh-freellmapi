@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.6.0] - 2026-10-14
+
+**The key form is back, and this time there is a row for it to attach to.** Reverts the removal in 0.5.0,
+which was decided on a premise that turned out to be false.
+
+### Fixed
+
+- **`settings.models.provider-card` is the *only* seat a third-party plugin has on the Models page, so
+  removing the browser half removed the only way to enter a key there.** 0.5.0 dropped `lib/client.js` on
+  the reasoning that "the platform already renders a configurable provider's editor from the schema". That
+  holds for DSH's own two provider families and for nothing else: the page picks an editor's fields from
+  `layoutOf(ns)`, hard-coded to `llm-deepseek` and `llm-pi-ai`, and returns `"unknown"` for every other
+  namespace — which renders the "edit it in `cordis.patch.yml`" hint and **disables Save**
+  (`dsh-client-ui-settings-models/lib/client.js:1493-1497`, `:1813-1816`, `:1828`). The own-settings-page
+  fallback is real but weaker: it cannot express per-upstream keys, and it lives three clicks away from the
+  page where a user looks for a model key.
+
+  The browser half is restored from v0.4.1. Its registration is keyed `key: 'freellmapi'`, which the page
+  matches against `row.entry.settingsNs` — and that row only began to exist once 0.5.0 gave the plugin a
+  settings namespace and 0.5.1 pointed its directory entry at the namespace root. So 0.4.0 and 0.4.1 were
+  not wasted work; they were correct code waiting on a deeper bug, and both are live again.
+
+  The slot renders in the ordinary row card as well as in the first-run setup card
+  (`dsh-client-ui-settings-models/lib/client.js:2215-2219` and `:2150-2154`), so the per-upstream key rows
+  appear inside this plugin's own card whether or not anything is configured yet.
+
+### Changed
+
+- Restored the `./client` export, the `dsh.client` manifest block (with its `inject` ordering edges) and
+  the client test suite. Suite: 411 tests.
+
 ## [0.5.1] - 2026-10-14
 
 **The provider now shows up in the Models page.** 0.5.0 fixed why it could not; this release points its

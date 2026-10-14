@@ -1,11 +1,12 @@
 {
   "name": "dsh-freellmapi",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Self-contained free-tier LLM routing for DeepSeek Harness: one `auto` model that scores each request's complexity and picks the best of 12 free providers, failing over automatically. Unconfigured providers collapse to a single 'add your key' entry instead of dead models, and pinning a specific model is strict -- never silently swapped. Works with zero credentials out of the box.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
@@ -13,6 +14,14 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   },
   "files": [

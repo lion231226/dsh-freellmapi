@@ -47,7 +47,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.5.1   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.6.0   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -133,9 +133,25 @@
 key 是性价比最高的一步：默认候选池是 `groq`、`cerebras`、`openrouter`、`kilo`、`llm7`，把前三家补上
 就有了又强又快的模型。
 
-给 key 的方式是导出 `apiKeyEnv` 指定的那个环境变量——或者在**设置 → 模型 / 插件**里粘贴，由 DSH 的
-凭据服务保存。解析顺序是：凭据服务 → `config.providers[id].apiKey` → `apiKeyEnv` 指定的环境变量 →
+给 key 的方式是导出 `apiKeyEnv` 指定的那个环境变量——或者存进 DSH 的凭据服务，那是解析的第一顺位。
+解析顺序是：凭据服务 → `config.providers[id].apiKey` → `apiKeyEnv` 指定的环境变量 →
 约定名 `<PROVIDER_ID>_API_KEY`。空值一律等于"未配置"。
+
+> **在 GUI 里到哪里编辑。** **设置 → 模型**里本插件的 provider 路由（*FreeLLMAPI*）会作为一张普通卡片
+> 列出，而**密钥输入行就渲染在那张卡片内部**——每个"已启用但拿不到可用凭据"的家一行，含申请链接、
+> 将要存入的环境变量名、密码框和保存。保存走 DSH 的凭据服务，而该服务读取时**不缓存**，所以
+> **下一次请求即生效、无需重启**。
+>
+> 关于宿主自带编辑器的两点说明，免得把它的行为误当成 bug：
+>
+> - 卡片右侧的**编辑**按钮打开的是 DSH 的 provider 编辑器，它只能为自家的两个 provider 家族
+>   （`llm-deepseek`、`llm-pi-ai`）渲染字段；其他命名空间一律显示"其余字段在 cordis.patch.yml 中"并
+>   **禁用保存**。这是宿主当前的限制，上面那几行密钥输入就是针对它的解法。
+> - 根级 `apiKeyEnv`（`FREELLMAPI_API_KEY`）未设置时卡片会显示**缺凭据红点**。direct 模式不需要这个
+>   key——这一点只关乎可选的 gateway 凭据，可以忽略。
+>
+> 完整字段集（含各家上游的 `providers` 映射与路由旋钮）在插件**自己的设置页：设置 → 插件 →
+> dsh-freellmapi**，由 schema 生成；也可以直接编辑 `cordis.patch.yml`。
 
 | Provider | `apiKeyEnv` | 申请入口 | 免费额度（上游基线） | 默认 | 备注 |
 |---|---|---|---|---|---|
@@ -764,7 +780,7 @@ providers:
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.5.1` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.6.0` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立
