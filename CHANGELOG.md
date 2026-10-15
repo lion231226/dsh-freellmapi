@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.12] - 2026-10-15
+
+**Thinking effort is now declared where it can actually be kept — and nowhere else.**
+
+### Added
+
+- **`reasoning` is declared to DSH for a concrete model whose vocabulary was measured.** Objective 3 of this
+  round asked for thinking strength as a routing dimension; until now `reasoning_effort` was withheld outright
+  (0.7.4) because no honest declaration existed. It exists now, for three Groq rows, and it is wired up.
+
+  The declaration is made under **two conditions, both load-bearing**:
+
+  1. **`forwardReasoningEffort` must be on.** That flag governs whether the adapter actually sends
+     `reasoning_effort` upstream. If the declaration were independent of it, DSH would accept an effort and the
+     adapter would then drop it — a promise kept by nobody, and the same silent-degradation shape this plugin
+     exists to avoid. **Gating both on one flag makes declaration and forwarding impossible to disagree.**
+  2. **Only a concrete, measured model declares.** `auto` never does: it is one name for a pool whose members
+     were measured to differ (`qwen/qwen3.8-27b` accepts `none`; both gpt-oss models reject it), so a pool-wide
+     intersection is the vocabulary of *no* member and would silently apply to whichever model the router
+     picked. A model with no measurement declares nothing — absence of evidence is not a licence to guess.
+
+  **`defaultEffort` is deliberately omitted.** Setting it would make DSH inject an effort into requests that
+  never asked for one, including requests routed to a model that would ignore it. The declaration carries
+  `efforts` and nothing else, and a test asserts exactly that key set.
+
+  **Behaviour is unchanged by default**: with `forwardReasoningEffort` off (the default), nothing is declared
+  on any route, and a test pins that `false` behaves identically to absent.
+
+### Verification
+
+- **Reverse injection: PROVEN 3/3**, control green. The three injected defects were declaring regardless of the
+  flag, declaring a `defaultEffort`, and declaring an empty-effort set (which reads as "supports nothing" — a
+  claim — rather than as silence). All three reddened the guard.
+- **Suite: 460 passed, 0 failed, 0 skipped.** Gate G1–G10 PASS.
+
 ## [0.7.11] - 2026-10-15
 
 **The measured thinking-effort vocabulary now survives to where it can be used — and the guard for that was

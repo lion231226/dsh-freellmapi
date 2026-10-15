@@ -52,7 +52,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.7.11   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.7.12   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -544,9 +544,14 @@ that does not honour it — the silent-degradation shape this plugin exists to a
 
 So `reasoning_effort` is **withheld by default** and the withholding is logged (see `forwardReasoningEffort`).
 A profile-level `reasoningEffort` such as `max` therefore has **no effect on `auto` routes**. If you need
-thinking effort, pin a specific model and set `forwardReasoningEffort: true` — and note the vocabulary is
-**per model**: measured 2026-10-15, Groq accepts `low` / `medium` / `high` and rejects anything else with an
-explicit allowlist, while `qwen/qwen3.8-27b` also accepts `none` and both `gpt-oss` models do not.
+thinking effort, **pin a specific model** and set `forwardReasoningEffort: true`: the adapter then declares that
+model's **measured** vocabulary, so DSH checks your effort against what the model actually accepts instead of
+forwarding a value upstream to be rejected. Unmeasured models still declare nothing, and an unsupported effort
+on a pin is refused by DSH with `UNSUPPORTED_REASONING_EFFORT` rather than sent.
+
+The vocabulary is **per model** — measured 2026-10-15, Groq accepts `low` / `medium` / `high` and rejects
+anything else with an explicit allowlist, while `qwen/qwen3.8-27b` also accepts `none` and both `gpt-oss` models
+do not. That is why the effort options you see differ depending on which model you pin.
 
 ## Failover and health
 
@@ -1061,7 +1066,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.7.11` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.12` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package

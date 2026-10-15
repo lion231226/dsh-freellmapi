@@ -49,7 +49,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.7.11   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.7.12   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -486,7 +486,7 @@ routing:
 
 `auto` 代表整池，而池内**存在完全不做推理的模型**。DSH 会把请求的档位与模型**声明**的集合校验，而对一条合成路由来说，**没有一个诚实的集合可以声明**：任何"够用"的集合，都会在路由器恰好选中一个不履行它的模型时**被静默忽略**——那正是这个插件存在的意义所要避免的静默降级形态。
 
-因此 `reasoning_effort` **默认不转发**，且该丢弃**会写进日志**（见 `forwardReasoningEffort`）。所以 profile 级的 `reasoningEffort`（例如 `max`）**对 `auto` 路由没有任何效果**。若你确实需要思考强度，请**钉住一个具体模型**并设 `forwardReasoningEffort: true`——注意档位词表**按模型不同**：2026-10-15 实测，Groq 接受 `low` / `medium` / `high` 并用显式白名单拒绝其它取值，而 `qwen/qwen3.8-27b` 连 `none` 也接受，两个 `gpt-oss` 都不接受。
+因此 `reasoning_effort` **默认不转发**，且该丢弃**会写进日志**（见 `forwardReasoningEffort`）。所以 profile 级的 `reasoningEffort`（例如 `max`）**对 `auto` 路由没有任何效果**。若你确实需要思考强度，请**钉住一个具体模型**并设 `forwardReasoningEffort: true`：适配器会声明该模型**实测**的档位词表，于是 DSH 会拿你的档位与该模型**真正接受**的取值校验，而不是发上去换回一个 400。未实测的模型仍然什么都不声明；钉住模型上给了不支持的档位时，DSH 会以 `UNSUPPORTED_REASONING_EFFORT` **拒绝**而不是照发。`n`档位词表**按模型不同**——2026-10-15 实测，Groq 接受 `low` / `medium` / `high` 并用显式白名单拒绝其它取值，而 `qwen/qwen3.8-27b` 连 `none` 也接受，两个 `gpt-oss` 都不接受。这就是为什么**钉不同模型时看到的档位选项不一样**。
 
 ## 故障转移与健康度
 
@@ -935,7 +935,7 @@ providers:
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.7.11` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.12` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立
