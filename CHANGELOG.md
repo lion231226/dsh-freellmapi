@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.6] - 2026-10-15
+
+**`auto` no longer declares a capacity wider than the models it will actually route to.** This is P2, the gap
+0.7.5 recorded rather than hid — and the branch that had to change was not the one the plan named.
+
+### Fixed
+
+- **The capacity `auto` declares to DSH is now `min(pool, config)`, floored at 131,072.** DSH budgets its
+  compaction threshold from that declaration, so a declaration wider than what routing may pick lets a session
+  grow past the model's real limit. Measured 2026-10-15: `auto` declared **131,072** while a **32,000**-token
+  model served every plain request.
+
+  **The fix had to go in a different place than the plan said.** The first attempt changed the *gateway* branch
+  of `#modelInfo()`, but in `direct` mode — the default — `auto` is not a `provider/model` pair, so it takes
+  the *pin* branch and falls through `caps?.contextWindow ?? config.contextWindow`. The gateway change was
+  therefore **inert for the configuration that mattered**, and reverse injection said so: two of three injected
+  defects left the guard green because the code they patched never ran. The same two injections turned red once
+  the fix moved to the branch `auto` actually uses.
+
+- **Models below the declared capacity are excluded from `auto`**, with an exclusion reason naming the contract
+  rather than a silent skip. A pool that cannot reach the floor is treated differently: it declares what it can
+  serve (`min(pool, config)`) and keeps every model, because such a pool is already below DSH's 65,536-token
+  headroom — imposing the floor there would empty `auto` and help nobody.
+
+- **`config.contextWindow` is now an upper bound, not the exact declaration.** The operator says "budget no more
+  than this"; the pool says "and no more than I can serve". Meaning preserved, so no silent semantic change to
+  a documented knob — but the *effect* is a behaviour change and is called out here: **enabling a provider whose
+  models are smaller than 131,072 tokens no longer brings those models into `auto`.** They remain reachable by
+  pinning them explicitly, which the capacity contract deliberately does not constrain.
+
+- **A pinned `provider/model` is never subject to the floor.** The contract exists to constrain `auto`'s own
+  choices, not the user's explicit one.
+
+### Added
+
+- **`tests/agent-session.test.mjs`** gained the two assertions this required: a pool that cannot reach the floor
+  must declare what it can serve *and stay usable*, and a pool that can reach it must never have a model below
+  the declaration served. The second fixture is load-bearing — with the original harness pool, both the correct
+  rule and the naive `config.contextWindow` return 131,072, so that fixture **cannot tell them apart**.
+
+### Notes on scope
+
+- **Why the floor is 131,072 and not "just above DSH's headroom".** DSH's threshold is
+  `min(W × 0.8, W − 65,536)`. Declaring 65,537 — just above the headroom — makes the second term **1**, which
+  would compact on essentially every step: a worse failure than the one being fixed. 131,072 keeps the
+  threshold at 65,536, the value DSH was already using.
+- **Reverse injection (on a copy)**: 3/3 injected defects reddened the guard — ignoring the pool again,
+  ignoring what a small pool can serve, and letting routing back below the declaration — with the copy's sha256
+  compared before and after each. The first run reported 1/3, and that partial result is what exposed the
+  wrong branch.
+
 ## [0.7.5] - 2026-10-15
 
 **An agent-session harness — and it found a real defect on its first run.**

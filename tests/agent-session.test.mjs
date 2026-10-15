@@ -80,17 +80,25 @@ function answeringPool (pool) {
   return null
 }
 
-test('★ an agent session that outgrows the small model stops being routed to it', async (t) => {
+test('★ an agent session never routes to a model below the capacity `auto` declares', async (t) => {
   const pool = await agentPool()
   const mounted = mountPlugin({ config: { mode: 'direct', providers: pool.config } })
   t.after(async () => { await mounted.close?.(); await pool.close() })
 
-  // Turn 1 is small: the attractive model is a legitimate choice.
-  assertValidChunkSequence(await collect(mounted.adapter.stream(ask('hi'))))
-  assert.equal(answeringPool(pool), 'smallpool', 'the first turn is small enough for the cheap model')
+  const declared = (await mounted.adapter.resolveModel('freellmapi', 'auto'))?.context?.contextWindow
+  assert.ok(Number.isFinite(declared) && declared > 0, `auto must declare a capacity, got ${JSON.stringify(declared)}`)
 
-  // Now grow the history past what the small model can hold. The conversation is
-  // resent every turn, exactly as an agent loop does.
+  // Even the smallest request must be served by a model that can hold the capacity
+  // we taught DSH to budget — otherwise the declaration is a promise routing breaks.
+  assertValidChunkSequence(await collect(mounted.adapter.stream(ask('hi'))))
+  const windows = { smallpool: 32_000, midpool: 200_000, bigpool: 900_000 }
+  const first = answeringPool(pool)
+  assert.notEqual(first, null, 'a model must have answered')
+  assert.ok(windows[first] >= declared,
+    `★ ${first} (${windows[first]}) answered under a declaration of ${declared}`)
+
+  // And it must hold as the history grows, too: no turn may land on a model below
+  // the declared capacity, and none may be overflowed.
   const history = []
   for (let turn = 0; turn < 6; turn++) {
     history.push({ role: 'user', content: [{ type: 'text', text: 'x'.repeat(40_000) }] })
@@ -104,12 +112,10 @@ test('★ an agent session that outgrows the small model stops being routed to i
   })))
   assert.equal(answer.finish.kind, 'stop', JSON.stringify(answer.finish))
 
-  const servedBySmallAgain = pool.requests('smallpool').length > before
-  const overflowed = pool.overflows('smallpool').length > 0
-  assert.equal(overflowed, false,
-    '★ the small model must never be sent a request it cannot hold — an upstream 400 is the failure mode')
-  assert.equal(servedBySmallAgain, false,
-    '★ once the history outgrows the small model, routing must move off it rather than overflow it')
+  assert.equal(pool.requests('smallpool').length > before, false,
+    '★ nothing below the declared capacity may be served under `auto`')
+  assert.equal(pool.overflows('smallpool').length, 0,
+    '★ and the excluded model must never receive a request it cannot hold')
 })
 
 test('★ a summary call in a grown session is served by a model that can hold the history', async (t) => {
@@ -159,32 +165,45 @@ test('★ one streamed answer never mixes two providers', async (t) => {
 })
 
 // ---------------------------------------------------------------------------
-// KNOWN GAP — asserted but not yet satisfied, deliberately left visible.
+// The contract that made compaction behave badly, now enforced.
 //
-// This harness found the defect on its first run: `auto` declares
-// `contextWindow: 131072` (lib/config.js DEFAULTS.contextWindow) while the router
-// is willing to serve a 32,000-token model, and it does so for every plain request.
-// DSH budgets its compaction threshold from the declared capacity — 131,072 gives
-// a threshold of 65,536 — so a session may grow to ~65k against a model that holds
-// 32k. The 0.7.2 work stops that from *failing* (the per-request gate moves the
-// turn to a wider model), but the declaration still overstates what routing may
-// pick, so the session is steered to the edge and then has to fail over at it.
+// `auto` is ONE model name standing for a pool whose windows differ by more than
+// an order of magnitude, and DSH budgets its compaction threshold from the capacity
+// declared for it. On 2026-10-15 this harness found the declaration at 131,072
+// while a 32,000-token model served every plain request — so a session could grow
+// to ~65k against a model holding 32k, and then fail over at the edge.
 //
-// The fix is the semantic change tracked as P2 in
-// `_lead/research/routing-redesign.md`: declare a capacity that routing cannot
-// undercut, i.e. `min(pool, config)` clamped to a floor just above DSH's own
-// 65,536-token headroom, with the models below that floor excluded from `auto`.
-// It changes what `config.contextWindow` *means*, which is the kind of change this
-// project requires sign-off for (rule 1: never change a documented knob's meaning
-// silently), so it is reported rather than shipped unannounced.
-//
-// Skipped rather than deleted, and rather than loosened until it passed: a test
-// that has been edited until it agrees with the code measures nothing.
+// The declaration is now `min(pool, config)` floored at 131,072 (a lower floor
+// would collapse DSH's threshold to ~1 and compact on every step), and models
+// below it are excluded from `auto` with a reason naming the contract. The test
+// below is the acceptance criterion that drove the change, so it is no longer
+// skipped.
 // ---------------------------------------------------------------------------
 
-test('KNOWN GAP (P2): the capacity declared to DSH covers every model the session can route to', {
-  skip: 'defect confirmed 2026-10-15 — declaration (131072) exceeds a model the router serves (32000); fix is P2, pending sign-off',
-}, async (t) => {
+test('★ a pool that cannot reach the floor declares what it can serve, not the configured ceiling', async (t) => {
+  // The distinguishing case. With a pool that reaches the floor (the harness above)
+  // both the correct rule and the naive `config.contextWindow` happen to return
+  // 131,072, so that fixture cannot tell them apart. A pool of only-small models
+  // separates them: the naive rule would declare 131,072 for models that hold
+  // 32,000 — the original defect — while the correct rule declares what the pool
+  // can serve.
+  const pool = await startMockPool([
+    { id: 'smallpool', models: [{ id: 'small-a', contextWindow: 32_000 }, { id: 'small-b', contextWindow: 48_000 }] },
+  ])
+  const mounted = mountPlugin({ config: { mode: 'direct', providers: pool.config } })
+  t.after(async () => { await mounted.close?.(); await pool.close() })
+
+  const declared = (await mounted.adapter.resolveModel('freellmapi', 'auto'))?.context?.contextWindow
+  assert.ok(Number.isFinite(declared) && declared > 0, `auto must declare a capacity, got ${JSON.stringify(declared)}`)
+  assert.ok(declared <= 48_000,
+    `★ the declaration must not exceed the widest model this pool can serve, got ${declared}`)
+  // And the pool still works: a small-only pool must not be emptied by the rule.
+  const answer = assertValidChunkSequence(await collect(mounted.adapter.stream(ask('hi'))))
+  assert.equal(answer.finish.kind, 'stop',
+    `a pool below the floor must remain usable: ${JSON.stringify(answer.finish)}`)
+})
+
+test('★ the capacity declared to DSH covers every model the session can route to', async (t) => {
   const pool = await agentPool()
   const mounted = mountPlugin({ config: { mode: 'direct', providers: pool.config } })
   t.after(async () => { await mounted.close?.(); await pool.close() })
