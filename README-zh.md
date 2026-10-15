@@ -29,6 +29,7 @@
 - [模型列表怎么读](#模型列表怎么读)
 - [钉模型是严格模式](#钉模型是严格模式)
 - [它怎么选模型](#它怎么选模型)
+- [长时 Agent 会话：用 `auto` 之前请先读这一节](#长时-agent-会话用-auto-之前请先读这一节)
 - [故障转移与健康度](#故障转移与健康度)
 - [两种模式：`direct` 与 `gateway`](#两种模式direct-与-gateway)
 - [配置](#配置)
@@ -48,7 +49,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.7.6   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.7.7   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -463,6 +464,23 @@ routing:
     tokens: 0.60      # 这是"单独饱和时的最大贡献"，不是占总量多少
     tools: 0.40
 ```
+
+## 长时 Agent 会话：用 `auto` 之前请先读这一节
+
+`auto` 是为**一次一个请求**设计的。长时 Agent 会话是形状不同的问题，而这个差别从模型选择器里看不出来——所以写在这里，而不是留给你自己撞上。
+
+**`auto` 声明了什么。** DSH 依据**适配器为它路由到的那个模型声明的上下文容量**来决定**何时压缩**会话。而 `auto` 是代表整池的一个模型名，所以它声明 `min(池内, config.contextWindow)`——**不会宽于池子实际能服务的最小窗口**，也不会低于 131,072（再往下 DSH 自己的阈值会塌陷，几乎每一步都要压缩）。低于该声明的模型**会被排除出 `auto`**；显式钉住它们仍然可用。
+
+**它在哪里仍会咬人。** 压缩会把会话最旧的一段替换成摘要，而**写摘要的那次调用本身带着"被压缩的那段历史"**。如果这次调用落到装不下它的模型上，压缩**在任何重试下都不可能成功**——会话永远不会变小。长会话里有两条机制会走到这一步：
+
+- 摘要由**路由器为那次调用挑中的模型**来写；
+- 而池内窗口相差超过一个数量级。
+
+**该怎么办。** 长时 Agent 任务请优先用**显式钉住的模型**，或窗口足够大的单一 provider，而不是 `auto`。钉模型是刻意的严格模式：**它绝不会在背后替换成别的模型**——当任务已经跑了一个小时，这正是你想要的性质。
+
+**插件目前做了什么。** 摘要调用（`purpose: 'compaction'`）**永不被钉**，且受一条自己的容量下限约束（`routing.compactionMinContextWindow`，默认 262,144）；当池内没有任何模型装得下该历史时，它会**响亮失败并点明这条下限**——让失败可见，而不是变成无界重试。路由日志会逐条记录每次排除及其理由。
+
+**诚实的现状。** 这**减轻**了该故障，并没有让一个免费池等同于一个宽窗口模型。这些数字背后的测量记录在 `_lead/research/routing-redesign.md`（工作区笔记，不随包分发）。
 
 ## 故障转移与健康度
 
@@ -911,7 +929,7 @@ providers:
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.7.6` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.7` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立
@@ -974,6 +992,7 @@ Tashfeen Ahmed，MIT）。把这件事说清楚很重要，因为本 README 此�
 名称归其所有者；"DeepSeek Harness" 与 `@deepseek-ai/*` 归 DeepSeek。免费档有自己的额度、条款与隐私
 政策，遵守它们是你的责任——其中几家会记录甚至训练你发送的内容。上游自述为"personal experimentation
 only"，部署任一项目前请阅读其自身条款。
+
 
 
 

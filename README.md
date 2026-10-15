@@ -31,6 +31,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 - [How to read the model list](#how-to-read-the-model-list)
 - [Pinned models are strict](#pinned-models-are-strict)
 - [How it picks a model](#how-it-picks-a-model)
+- [Long-running agent sessions: read this before you pick `auto`](#long-running-agent-sessions-read-this-before-you-pick-auto)
 - [Failover and health](#failover-and-health)
 - [Two modes: `direct` and `gateway`](#two-modes-direct-and-gateway)
 - [Configuration](#configuration)
@@ -51,7 +52,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.7.6   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.7.7   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -500,6 +501,39 @@ routing:
     tokens: 0.60      # standalone maximum contribution, not a share of a total
     tools: 0.40
 ```
+
+## Long-running agent sessions: read this before you pick `auto`
+
+`auto` is built for **one request at a time**. A long agent session is a different shape of problem, and the
+difference is not obvious from the model picker — so it is stated here rather than left to be discovered.
+
+**What `auto` declares.** DSH decides *when to compress* a session from the context capacity the adapter
+declares for the model it routed to. `auto` is one model name standing for a whole pool, so it declares
+`min(pool, config.contextWindow)` — never wider than the smallest window the pool will actually serve, and
+never below 131,072 (below roughly that figure DSH's own threshold collapses and it would compact on almost
+every step). Models smaller than the declaration are **excluded from `auto`**; they remain available by pinning
+them.
+
+**Where that still bites.** Compression replaces the oldest span of a session with a summary, and **the summary
+call itself carries the history being compressed**. If that call lands on a model that cannot hold it, the
+compaction cannot succeed at any retry — the session never gets smaller. Two mechanisms make that reachable in
+a long session:
+
+- the summary is written by **whichever model the router picks for that call**; and
+- the pool's windows differ by more than an order of magnitude.
+
+**What to do.** For a long agent task, prefer a model you have pinned explicitly, or a provider with a large
+single window, over `auto`. Pinning is strict by design: it never substitutes another model behind your back,
+which is exactly the property you want when a task has been running for an hour.
+
+**What the plugin does about it now.** A summarisation call (`purpose: 'compaction'`) is never pinned, is
+subject to a capacity floor of its own (`routing.compactionMinContextWindow`, default 262,144), and **fails
+loudly with the floor named** when nothing in the pool can hold the history — so the failure is visible instead
+of an unbounded retry loop. The routing log records every exclusion with its reason.
+
+**Honest status.** This reduces the failure; it does not make a free pool equivalent to one wide-window model.
+The measurements behind these numbers are in `_lead/research/routing-redesign.md` (workspace notes, not
+shipped).
 
 ## Failover and health
 
@@ -1014,7 +1048,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.7.6` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.7` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package
@@ -1085,6 +1119,7 @@ DeepSeek. Provider names belong to their owners; "DeepSeek Harness" and `@deepse
 Free tiers have quotas, terms and privacy policies that are yours to comply with — several of them log or
 train on what you send. Upstream describes itself as "personal experimentation only"; read their terms
 before deploying either project.
+
 
 
 

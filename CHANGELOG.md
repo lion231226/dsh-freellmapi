@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.7] - 2026-10-15
+
+**A README section for the one thing a user most needs to know, and could not find.**
+
+### Documented
+
+- **"Long-running agent sessions: read this before you pick `auto`"** — added to both READMEs (and their tables
+  of contents). The most actionable finding of the 0.7.2–0.7.6 work had been recorded only in the workspace
+  notes: that a long agent session and a single request are different shapes of problem, and that `auto` is
+  built for the second.
+
+  It states, in the user's terms: what capacity `auto` declares and why it is bounded by the pool; that a
+  summarisation call carries the history it is compressing, so it cannot succeed on a model that cannot hold
+  it, at any retry; that the summary is written by whichever model the router picks, over a pool whose windows
+  differ by more than an order of magnitude; and what to do instead — **pin a model explicitly for long agent
+  tasks**, because pinning is strict by design and never substitutes behind your back.
+
+  It also records what the plugin now does about it (compaction calls are never pinned, carry a capacity floor,
+  and fail loudly rather than looping) and an **honest status line**: this reduces the failure, it does not make
+  a free pool equivalent to one wide-window model.
+
+### Notes on scope
+
+- **This is documentation, not a fix.** The measured details stay in
+  `_lead/research/routing-redesign.md`; the README carries what changes a user's decision.
+- **Why it took a release to appear.** The finding was in the workspace notes from the moment it was measured,
+  and the release notes mentioned it — but the README is where a user picks a model, and it said nothing. A
+  finding that does not reach the place where the decision is made has not really been reported.
+
 ## [0.7.6] - 2026-10-15
 
 **`auto` no longer declares a capacity wider than the models it will actually route to.** This is P2, the gap
