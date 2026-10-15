@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.11] - 2026-10-15
+
+**The measured thinking-effort vocabulary now survives to where it can be used — and the guard for that was
+itself wrong once before it was right.**
+
+### Added
+
+- **`reasoning` on a pool model: the effort vocabulary that model was measured to accept.** Populated only from
+  measurement — a real credential on 2026-10-15 showed Groq validating `reasoning_effort` against an explicit
+  allowlist, and showed the vocabulary differing **per model**: `openai/gpt-oss-120b` and `openai/gpt-oss-20b`
+  accept `low` / `medium` / `high` and reject `none`; `qwen/qwen3.8-27b` accepts `low` / `medium` / `high` /
+  `none`. Every entry cites the probe that produced it.
+
+  An **absent** field means "not measured" and is the default for every other model in the pool. Nothing
+  inherits a claim from its provider or its family — that is exactly what the per-model difference rules out.
+
+- **`listProviderModels` now carries the field through.** It did not, and the drop was silent: the declaration
+  held the vocabulary while the row the picker and the adapter consume had `undefined`. This is the third
+  instance of the same shape (`verified`, the `contextWindow` cross-references, now `reasoning`), which is why
+  the guard asserts survival through the transform rather than reading the source declaration.
+
+### Notes on scope
+
+- **Nothing declares this to DSH yet, deliberately.** Declaring is a separate decision with its own gate — a
+  declaration must be paired with actually forwarding the value, or it becomes a promise the adapter does not
+  keep. The vocabulary is data; the declaration is not made here.
+- **A guard that passed for the wrong reason, caught by reverse injection.** The first version of
+  `tests/reasoning-vocabulary.test.mjs` asserted that a malformed vocabulary "is dropped rather than passed on".
+  Reverse injection reported `INERT`: removing the predicate left the guard green, because
+  `providerDeclarations()` never hands `listProviderModels` a malformed value in the first place. The test was
+  not verifying the predicate — it was passing because the input never arrived. It now asserts only what is
+  true (the resulting row carries no claim), states that the predicate is defence in depth rather than
+  load-bearing, and pins that its fixture really does produce a row so it cannot pass vacuously. Two of the
+  three injections redden the guard; the third is **reported as INERT by the harness**, not counted.
+
+- **A suite flake is real and still undiagnosed.** The full suite failed once in four runs, then passed eight
+  times in a row (~1 in 12 overall). It is the same intermittent behaviour previously noted at
+  `tests/direct.test.mjs:401` ("a cooled-down provider is skipped", mock receives 0 requests). It is **not**
+  masked by a retry, and its name was not captured in this round; it stays on the list as an open defect rather
+  than being retried green.
+
 ## [0.7.10] - 2026-10-15
 
 **`auto` ignores thinking effort. The READMEs said nothing about it, so a profile set to `max` looked
