@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.16] - 2026-10-15
+
+**The skill ships with the repository. 0.7.15 put it in the wrong place for the wrong reason.**
+
+### Fixed
+
+- **The project skill moved into the repository** at `.dsh/skills/dsh-freellmapi/SKILL.md`. 0.7.15 placed it
+  under the *workspace* and justified that with "the ledger is in the package, the method stays in the
+  workspace" — **which conflated two different things.** `_lead/` is a workbench of raw measurements and probe
+  scripts; the skill is a **deliverable**, the carryable part of this project's method. Citing the `_lead/`
+  rule (0.7.1's gitignore entry for investigation notes) to keep a deliverable out of version control was a
+  misapplication of it.
+
+  The consequence was concrete: a `git clone` of this repository carried **no skill at all**, so the five
+  judgements that cost the most to learn stayed on one machine.
+
+- **`.dsh/` is un-ignored narrowly rather than broadly.** The existing rule was `.dsh/` (local DSH state when
+  someone runs a throwaway profile inside the repo). It is now `.dsh/*` plus `!.dsh/skills/` — and the pattern
+  *has* to change shape, because excluding the directory itself stops git from descending into it, so no
+  negation could ever apply. Verified by rule and not by eye:
+  `.dsh/local-state-probe.json` → ignored by `.gitignore:18:.dsh/*`;
+  `.dsh/profiles/probe.txt` → ignored by `.gitignore:25:profiles/`;
+  `.dsh/skills/dsh-freellmapi/SKILL.md` → **not** ignored.
+
+  **The first attempt to verify that reported the opposite, because the check was wrong.** `git check-ignore -q`
+  prints nothing, and the probe read its *output* instead of its exit code, so both ignored paths looked
+  unignored. Re-run with `-v` and `$LASTEXITCODE`, the answer inverted. This is the skill's own third judgement
+  — *suspect the instrument first* — happening again while testing that judgement.
+
+- **The workspace copy is now a symlink** into the repository, so the two cannot drift. This project already
+  knows where two hand-maintained copies lead (G6 exists because of it). The link was **verified end to end**:
+  the skill registry still resolves it and returns the full body with the workspace base directory, so the
+  symlink did not quietly break discovery.
+
+### Notes on scope
+
+- **`PROJECT-RULES.md` rule 9 and the quick index said "不进发布包" and have been corrected** to describe the
+  repository location, the `.gitignore` shape and why it must be `.dsh/*`, and the symlink. A rule that
+  contradicts the tree is exactly the failure this project treats as expensive (L13: a false premise in the
+  rules file is worse than one in a report, because nobody re-checks it later).
+- The skill's own content is unchanged; only its home moved.
+
 ## [0.7.15] - 2026-10-15
 
 **The lessons become portable, and half of §2's self-optimisation loop becomes executable.**

@@ -228,7 +228,7 @@ DSH 的插件契约大多没有文档。判断"平台支持什么"，读 `app.as
 
 ### 规则 9：**每条红灯都要回头问一句"SKILL 要不要改"**
 
-**技能位置**：`<工作区>/.dsh/skills/dsh-freellmapi/SKILL.md` —— **项目级技能**，来自 `dsh-skill-hub` 的 `project-dsh` 根（`<project>/.dsh/skills`，已从该插件产物 `lib/index.js` 核实）。它**不进发布包**：发布包内是 `PROJECT-RULES.md`，工作方法留在工作区。
+**技能位置**：`<repo>/.dsh/skills/dsh-freellmapi/SKILL.md` —— 它是**交付物**，**随仓库走**。`dsh-skill-hub` 的 `project-dsh` 根就是 `<project>/.dsh/skills`（已从该插件产物 `lib/index.js` 核实），所以**单独 `git clone` 本仓库即得到一份可用的项目技能**，不需要额外拷贝步骤。`.gitignore` 用 `.dsh/*` + `!.dsh/skills/` 做**最小放行**（只放行 skills，`.dsh/` 下的本地状态与 profiles 仍被忽略）；注意不能写成 `.dsh/`——排除目录本身会让 git 根本不进入它，任何否定规则都不会生效。当前工作区那份是指向它的**符号链接**，物理上不可能漂移（两份手维护的表必然漂移，见 G6）。
 
 **为什么必须有这条**：账本（§4）是**本项目的档案**，记载"哪一天、因为什么、付了什么代价"；SKILL 是**可携带的判据**，回答"换个项目该怎么做"。两者必然分叉——账本会越来越长，而真正可复用的那几条判据会被埋在第 20 行里。**只在账本里追加、不回头提炼，等于让教训烂在档案里。**
 
@@ -310,7 +310,7 @@ DSH 的插件契约大多没有文档。判断"平台支持什么"，读 `app.as
 | 加一家 provider | `docs/EXPANSION-v0.7.md`（任务书）→ `lib/providers.js` → 生成器 → G1/G6/G7/G10 |
 | 判断 UI 为什么没显示 | 规则 7 的五步固定诊断顺序 |
 | 发布 | §1 的[A]发布仪式 |
-| **换个项目也要用的判据** | `<工作区>/.dsh/skills/dsh-freellmapi/SKILL.md`（项目级技能，不进发布包） |
+| **换个项目也要用的判据** | `<repo>/.dsh/skills/dsh-freellmapi/SKILL.md`（随仓库分发；工作区那份是它的符号链接） |
 | 改了东西，SKILL 要不要更新 | 规则 9 的四个判据（逐条问，答案写进账本"固化成"列） |
 | 新会话起步 | `docs/NEW-SESSION.md` |
 | 设计说明与每一处刻意偏离 | `IMPLEMENTATION.md` |

@@ -12,7 +12,16 @@ package-lock.json.bak
 *.key
 
 # Local DSH state, when someone runs a throwaway profile inside the repo.
-.dsh/
+# NOTE: the pattern is .dsh/* rather than .dsh/ so that ONE thing inside can be
+# un-ignored below. Excluding the directory itself would stop git from descending
+# into it, and no negation would ever apply.
+.dsh/*
+# The project skill is a DELIVERABLE, not local state: it is the carryable part of
+# this project's method, and it belongs in the repository so a clone carries it.
+# Kept at .dsh/skills/ specifically because that is the path DSH scans for project
+# skills — so a plain git clone of this repository puts a working skill in place,
+# with no copy step and therefore no second copy to drift.
+!.dsh/skills/
 profiles/
 
 # Logs and diagnostics.
