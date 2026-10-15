@@ -207,6 +207,13 @@ the method that suits it and prints the method beside each result, so the verdic
 trusted. G7 asks `GET {baseURL}/models` only, so read its green as *"the host answers"*, not as *"this
 provider will serve you a completion once you add a key"*.
 
+**G10 answers the question G7 cannot.** A host that answers says nothing about whether the specific **model
+ids** we ship are still served — and that gap let the same defect ship three times: four OpenRouter ids and
+two Groq ids that the provider had retired, each found by a person rather than by the gate. G10 compares every
+declared id against what the catalogue actually lists. For a **default-enabled** provider a dead id **blocks**;
+for a default-disabled one it is reported as latent and blocks the moment that provider is enabled. Catalogues
+that need a credential are recorded as `not checked` — a `401` is not evidence that an id is missing.
+
 Measured this way on 2026-10-15:
 
 - **All 12 pre-0.7 pool providers answer** (G7, 2026-10-15) — including the two the old table called blocked.
