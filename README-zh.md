@@ -49,7 +49,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.7.7   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.7.8   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -63,7 +63,7 @@
 4. **看它干活** —— `logRouting` 默认打开，每个请求一行日志：
 
    ```text
-   dsh-freellmapi: tier=complex -> openrouter/deepseek/deepseek-v3.1:free (capability=5, speed=3, 2 candidates tried)
+   dsh-freellmapi: tier=complex -> openrouter/nvidia/nemotron-3-ultra-550b-a55b:free (capability=5, speed=3, 2 candidates tried)
    ```
 
 安装到这里就结束了，下面全是细节。
@@ -255,9 +255,9 @@ key 是性价比最高的一步：默认候选池是 `groq`、`cerebras`、`open
 
 | Provider | `apiKeyEnv` | 申请入口 | 免费额度（上游基线） | 默认 | 备注 |
 |---|---|---|---|---|---|
-| `groq` | `GROQ_API_KEY` | <https://console.groq.com/keys> | 30 RPM / 1000 RPD / ~8K TPM / 200K TPD | ✅ 开 | 快；`openai/gpt-oss-120b`、`llama-3.3-70b-versatile`、`llama-3.1-8b-instant` |
+| `groq` | `GROQ_API_KEY` | <https://console.groq.com/keys> | 30 RPM / 1000 RPD / ~8K TPM / 200K TPD | ✅ 开 | 快；`openai/gpt-oss-120b`、`qwen/qwen3.8-27b`、`openai/gpt-oss-20b`（_模型 id 于 2026-10-15 重新实测：有两条旧 id 已被上游下架_） |
 | `cerebras` | `CEREBRAS_API_KEY` | <https://cloud.cerebras.ai/> | 30 RPM / 无 RPD / 60K TPM / 1M TPD | ✅ 开 | 两个模型同时是能力 5 与速度 5；上游另有一版更紧的额度记录（5 RPM / 30K TPM） |
-| `openrouter` | `OPENROUTER_API_KEY` | <https://openrouter.ai/keys> | 20 RPM / 200 RPD | ✅ 开 | `complex` 档的主力（`deepseek/deepseek-v3.1:free`、`moonshotai/kimi-k2.6:free`、`qwen/qwen3-coder:free`） |
+| `openrouter` | `OPENROUTER_API_KEY` | <https://openrouter.ai/keys> | 20 RPM / 200 RPD | ✅ 开 | `complex` 档的主力（`nvidia/nemotron-3-ultra-550b-a55b:free`、`nemotron-3-super-120b-a12b:free`、`cohere/north-mini-code:free`） |
 | `llm7` | `LLM7_API_KEY` | <https://token.llm7.io/> | 约 100 请求/小时 | ✅ 开 | **免凭据可用**；有 key 只是抬高上限。申请页是文档级证据，未经独立复核 |
 | `kilo` | `KILO_API_KEY` | — | 约 200 请求/小时每 IP | ✅ 开 | **免凭据可用。** 免费流量会被记录用于训练 |
 | `github` | `GITHUB_MODELS_TOKEN` | — | 10 RPM / 50 RPD | ⬜ 关 | 有 `openai/gpt-5`，但限流极紧 |
@@ -351,7 +351,7 @@ setup:openrouter  OpenRouter ▸ needs OPENROUTER_API_KEY (free key: openrouter.
 ## 钉模型是严格模式
 
 `auto` 与 `auto:simple|medium|complex` 是让插件**替你选**。任何其它模型 id——选择器里的复合
-`provider/model`，或像 `llama-3.3-70b-versatile` 这样的裸 id——都是**钉模型**：你点名要那一个，插件
+`provider/model`，或像 `qwen/qwen3.8-27b` 这样的裸 id——都是**钉模型**：你点名要那一个，插件
 绝不会拿另一个来答。
 
 严格正是重点。到 v0.2.0 为止，钉住的模型会被**静默替换**：没配 key 时选 `Llama 3.3 70B · Groq`，
@@ -421,8 +421,8 @@ score = 1 − Π (1 − wᵢ · sᵢ)  −  simplePenalty
 | 名次 | `simple` | `complex` |
 |---|---|---|
 | 1–5 | cerebras `llama-4-maverick-17b`（c5/s5）、cerebras `qwen-3-coder-480b`（c5/s5）、cerebras `gpt-oss-120b`（c4/s5） | 同样两个 c5/s5 模型，然后是 kilo `nemotron-3-super-120b`（c5/s3） |
-| 6–7 | cerebras `llama3.1-8b`（c2/s5）、groq `llama-3.1-8b-instant`（c2/s5） | openrouter `deepseek-v3.1:free`（c5/s3）、`kimi-k2.6:free`（c5/s3） |
-| 16–17 | openrouter `qwen3-coder:free`（c5/s3）、`nemotron-nano-12b-v2-vl`（c3/s3） | cerebras `llama3.1-8b`（c2/s5）、groq `llama-3.1-8b-instant`（c2/s5） |
+| 6–7 | cerebras `llama3.1-8b`（c2/s5）、groq `openai/gpt-oss-20b`（c2/s5） | openrouter `nvidia/nemotron-3-super-120b-a12b:free`（c5/s3） |
+| 16–17 | openrouter `cohere/north-mini-code:free`（c3/s4） | cerebras `llama3.1-8b`（c2/s5）、groq `openai/gpt-oss-20b`（c2/s5） |
 
 （两个 Cerebras 模型同时是能力 5 与速度 5，所以它们在任何档位都排第一，这是合理的。档位决定的是它们
 **之后**的顺序——小快模型就是从第 17 名跳到第 6 名的那一段。）
@@ -447,7 +447,7 @@ score = 1 − Π (1 − wᵢ · sᵢ)  −  simplePenalty
 | `auto:medium` | 强制均衡档 |
 | `auto:complex` | 强制最强档 |
 
-任何**其它** id——`llm7/codestral-latest`，或裸的 `llama-3.3-70b-versatile`——都是严格钉模型而不是
+任何**其它** id——`llm7/codestral-latest`，或裸的 `qwen/qwen3.8-27b`——都是严格钉模型而不是
 档位：见[钉模型是严格模式](#钉模型是严格模式)。
 
 强制档位时分类器**照跑**——分数与理由都会记录，日志行会注明 `(forced by the selected model id)`——
@@ -667,7 +667,7 @@ mode: gateway            # 默认是 "direct"；gateway 还需要 baseURL 与一
 **direct 模式**每个请求一行日志：
 
 ```text
-dsh-freellmapi: tier=complex -> openrouter/deepseek/deepseek-v3.1:free (capability=5, speed=3, 2 candidates tried)
+dsh-freellmapi: tier=complex -> openrouter/nvidia/nemotron-3-ultra-550b-a55b:free (capability=5, speed=3, 2 candidates tried)
 dsh-freellmapi: tier=simple -> no candidate (0 candidates tried)
 ```
 
@@ -771,7 +771,7 @@ dsh-freellmapi: routed via groq/llama-3.3-70b (model=auto) fallback-attempts=2 t
 终结 chunk 会说 `ALL_CANDIDATES_FAILED`，并带上轨迹：
 
 ```text
-dsh-freellmapi: all 3 candidate(s) failed for tier=medium after 2 attempts — groq/llama-3.3-70b-versatile: RATE_LIMIT; …
+dsh-freellmapi: all 3 candidate(s) failed for tier=medium after 2 attempts — groq/qwen/qwen3.8-27b: RATE_LIMIT; …
 ```
 
 如果是 `NO_CANDIDATES`，说明在发请求之前池子就是空的：什么都没配且没有启用免凭据家，或者所有候选都
@@ -914,7 +914,7 @@ Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
 providers:
   groq:
     models:
-      - id: llama-3.3-70b-versatile
+      - id: qwen/qwen3.8-27b
         name: Llama 3.3 70B
         capability: 4
         speed: 5
@@ -929,7 +929,7 @@ providers:
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.7.7` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.8` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立

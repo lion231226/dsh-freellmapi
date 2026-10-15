@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.8] - 2026-10-15
+
+**Two of groq's three models had been retired upstream and were still shipped as default-on.** Measured with a
+real credential, which is the only way this was ever going to be found.
+
+### Fixed
+
+- **`groq` shipped two dead model ids.** `GET https://api.groq.com/openai/v1/models` serves **11 models**, and
+  neither `llama-3.3-70b-versatile` nor `llama-3.1-8b-instant` is among them — both answer **HTTP 404**. They
+  were **default-enabled**, so the default `groq` pool was two-thirds dead.
+
+  Both are replaced by ids verified live in the same run:
+
+  | replaces | with | tool calling | context |
+  |---|---|---|---|
+  | `llama-3.3-70b-versatile` | `qwen/qwen3.8-27b` | **measured**: structured `tool_calls`, valid JSON | 131,072 (measured) |
+  | `llama-3.1-8b-instant` | `openai/gpt-oss-20b` | **measured**: structured `tool_calls`, valid JSON | 131,072 (measured) |
+
+  Every field on the two new rows carries its method in `source:` — the listing it came from, the tool probe
+  that established `toolCalling`, and the day it was measured. `capability`/`speed` keep the ratings of the
+  rows they replace, which is a **judgement, not a measurement**, and is the one thing on these rows not
+  traceable to a probe.
+
+- **`limits.note` no longer cites a retired model as its baseline.** The quota figures came from a 2026-04
+  baseline built on `llama-3.3-70b`, so they are now labelled a **conservative historical baseline** rather
+  than a description of anything currently on sale.
+
+- **The READMEs no longer present retired ids as current** — the provider table, the pinning examples, the
+  worked routing examples, the sample routing log and a YAML snippet all named models that no longer exist.
+  The worked examples were relabelled from live models onto the current pool rather than left as plausible-
+  looking fiction.
+
+### Notes on scope
+
+- **The gate could not have caught this, and still cannot.** `tools/gate.mjs` G7 probes **provider-level**
+  reachability: one `GET /models` per provider, checking 200/401/403. It never compares a **model id** against
+  what the provider actually serves, so "the provider is up, but the id we transcribed is retired" is invisible
+  to it. This is the same gap that let four dead OpenRouter ids ship until a user reported them (0.7.1).
+  An **id-level check** for credential-free providers is the obvious next gate; for keyed providers it can only
+  run when a credential is present. Recorded, not yet built.
+- **A measurement method worth keeping.** The tool-calling probe's control request originally used the same
+  "call the tool" prompt as the test, so the model tried to call it anyway and the control failed with
+  `400 tool_use_failed: "Tool choice is none, but model called a tool"`. The run correctly reported
+  **NOT MEASURED** rather than a verdict, and the control was changed to a prompt that does not invite a call.
+  A control has to be a request the provider should answer *without* the feature under test.
+- **`reasoning_effort`, measured at last.** groq validates the field and rejects unknown values with an explicit
+  allowlist — `` `reasoning_effort` must be one of `low`, `medium`, or `high` `` — and the vocabulary is
+  **per model** (`qwen/qwen3.8-27b` also accepts `none`; both gpt-oss models reject it). This is the evidence
+  the anonymous probes could not obtain, and it means a `reasoning` declaration, if added, must be per model.
+  Not implemented in this release.
+
 ## [0.7.7] - 2026-10-15
 
 **A README section for the one thing a user most needs to know, and could not find.**

@@ -52,7 +52,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.7.7   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.7.8   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -66,7 +66,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 4. **Watch it work** — with `logRouting` on (the default) every request logs one line:
 
    ```text
-   dsh-freellmapi: tier=complex -> openrouter/deepseek/deepseek-v3.1:free (capability=5, speed=3, 2 candidates tried)
+   dsh-freellmapi: tier=complex -> openrouter/nvidia/nemotron-3-ultra-550b-a55b:free (capability=5, speed=3, 2 candidates tried)
    ```
 
 That is the whole setup. Everything below is detail.
@@ -278,9 +278,9 @@ the reason previously given for that was wrong.)
 
 | Provider | `apiKeyEnv` | Key page | Free tier (upstream baseline) | Default | Notes |
 |---|---|---|---|---|---|
-| `groq` | `GROQ_API_KEY` | <https://console.groq.com/keys> | 30 RPM / 1000 RPD / ~8K TPM / 200K TPD | ✅ on | Fast; `openai/gpt-oss-120b`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant` |
+| `groq` | `GROQ_API_KEY` | <https://console.groq.com/keys> | 30 RPM / 1000 RPD / ~8K TPM / 200K TPD | ✅ on | Fast; `openai/gpt-oss-120b`, `qwen/qwen3.8-27b`, `openai/gpt-oss-20b` (_ids re-measured 2026-10-15: two older ids had been retired upstream_) |
 | `cerebras` | `CEREBRAS_API_KEY` | <https://cloud.cerebras.ai/> | 30 RPM / no RPD / 60K TPM / 1M TPD | ✅ on | Two models rated capability 5 **and** speed 5; upstream notes a second, tighter quota revision (5 RPM / 30K TPM) |
-| `openrouter` | `OPENROUTER_API_KEY` | <https://openrouter.ai/keys> | 20 RPM / 200 RPD | ✅ on | The `complex` tier's main supplier (`deepseek/deepseek-v3.1:free`, `moonshotai/kimi-k2.6:free`, `qwen/qwen3-coder:free`) |
+| `openrouter` | `OPENROUTER_API_KEY` | <https://openrouter.ai/keys> | 20 RPM / 200 RPD | ✅ on | The `complex` tier's main supplier (`nvidia/nemotron-3-ultra-550b-a55b:free`, `nemotron-3-super-120b-a12b:free`, `cohere/north-mini-code:free`) |
 | `llm7` | `LLM7_API_KEY` | <https://token.llm7.io/> | ~100 req/hour | ✅ on | **Keyless works**; a key raises the ceiling. Key page is reported, not independently verified |
 | `kilo` | `KILO_API_KEY` | — | ~200 req/hour per IP | ✅ on | **Keyless works.** Free traffic is logged for training |
 | `github` | `GITHUB_MODELS_TOKEN` | — | 10 RPM / 50 RPD | ⬜ off | Has `openai/gpt-5`; the rate limits are punishing |
@@ -385,7 +385,7 @@ is a picker that looks broken. Working models are now sorted ahead of the guidan
 ## Pinned models are strict
 
 `auto` and `auto:simple|medium|complex` ask the plugin to **choose**. Any other model id — the composite
-`provider/model` from the picker, or a bare id such as `llama-3.3-70b-versatile` — is a **pin**: it asks
+`provider/model` from the picker, or a bare id such as `qwen/qwen3.8-27b` — is a **pin**: it asks
 for that one model, and the plugin will never answer with a different one.
 
 That strictness is the point. Up to v0.2.0 a pinned model could be **silently substituted**: with no key
@@ -458,8 +458,8 @@ And what the tier actually changes, with the default pool and every key configur
 | Rank | `simple` | `complex` |
 |---|---|---|
 | 1–5 | cerebras `llama-4-maverick-17b` (c5/s5), cerebras `qwen-3-coder-480b` (c5/s5), cerebras `gpt-oss-120b` (c4/s5) | same two c5/s5 models, then kilo `nemotron-3-super-120b` (c5/s3) |
-| 6–7 | cerebras `llama3.1-8b` (c2/s5), groq `llama-3.1-8b-instant` (c2/s5) | openrouter `deepseek-v3.1:free` (c5/s3), `kimi-k2.6:free` (c5/s3) |
-| 16–17 | openrouter `qwen3-coder:free` (c5/s3), `nemotron-nano-12b-v2-vl` (c3/s3) | cerebras `llama3.1-8b` (c2/s5), groq `llama-3.1-8b-instant` (c2/s5) |
+| 6–7 | cerebras `llama3.1-8b` (c2/s5), groq `openai/gpt-oss-20b` (c2/s5) | openrouter `nvidia/nemotron-3-super-120b-a12b:free` (c5/s3) |
+| 16–17 | openrouter `cohere/north-mini-code:free` (c3/s4) | cerebras `llama3.1-8b` (c2/s5), groq `openai/gpt-oss-20b` (c2/s5) |
 
 (The two Cerebras models are rated capability 5 *and* speed 5, so they legitimately top every tier. The
 tier decides the order **below** them, and that is where a small fast model jumps from 17th to 6th.)
@@ -484,7 +484,7 @@ So when *you* know better than the classifier, say so — the model id **is** th
 | `auto:medium` | Force the balanced lane |
 | `auto:complex` | Force the strongest lane |
 
-Any **other** id — `llm7/codestral-latest`, or a bare `llama-3.3-70b-versatile` — is a strict pin rather
+Any **other** id — `llm7/codestral-latest`, or a bare `qwen/qwen3.8-27b` — is a strict pin rather
 than a lane: see [Pinned models are strict](#pinned-models-are-strict).
 
 The classifier still runs for the forced tiers — the score and the reasons are recorded, and the log line
@@ -749,7 +749,7 @@ A provider that is not in the built-in pool at all is added the same way: give i
 **Direct mode** logs one line per request:
 
 ```text
-dsh-freellmapi: tier=complex -> openrouter/deepseek/deepseek-v3.1:free (capability=5, speed=3, 2 candidates tried)
+dsh-freellmapi: tier=complex -> openrouter/nvidia/nemotron-3-ultra-550b-a55b:free (capability=5, speed=3, 2 candidates tried)
 dsh-freellmapi: tier=simple -> no candidate (0 candidates tried)
 ```
 
@@ -863,7 +863,7 @@ provider's key, lower concurrency, or use
 The terminal chunk says `ALL_CANDIDATES_FAILED` and carries the trail:
 
 ```text
-dsh-freellmapi: all 3 candidate(s) failed for tier=medium after 2 attempts — groq/llama-3.3-70b-versatile: RATE_LIMIT; …
+dsh-freellmapi: all 3 candidate(s) failed for tier=medium after 2 attempts — groq/qwen/qwen3.8-27b: RATE_LIMIT; …
 ```
 
 `NO_CANDIDATES` instead means the pool was empty before any request went out: nothing configured and no
@@ -1033,7 +1033,7 @@ If a provider in your install reports a different window, override it per model 
 providers:
   groq:
     models:
-      - id: llama-3.3-70b-versatile
+      - id: qwen/qwen3.8-27b
         name: Llama 3.3 70B
         capability: 4
         speed: 5
@@ -1048,7 +1048,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.7.7` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.8` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package
