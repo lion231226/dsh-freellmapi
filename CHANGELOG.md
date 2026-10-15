@@ -9,6 +9,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.6.3] - 2026-10-15
+
+**A wrong claim, a gate that would have caught it, and the rules this project runs on.**
+
+### Fixed
+
+- **The 0.6.1 reachability table was wrong, and its method was the reason.** It claimed `groq` and
+  `cerebras` were region-blocked "and a key changes nothing". The probe sent **no `Authorization` header**,
+  so it read *"this edge rejects anonymous requests"* as *"this region is blocked"*. Measured again on
+  2026-10-15 with the header present:
+
+  | Provider | no credential | bogus-but-well-formed key |
+  |---|---|---|
+  | `groq` | 403 | **401 → reachable** |
+  | `cerebras` | 403 | **401 → reachable** |
+  | `ovh` (keyless) | 200 | **403 → sending a key breaks a keyless provider** |
+
+  A `403` means one of three different things depending on what was sent — anonymous rejected, credential
+  rejected, or region rejected — and reporting one without the other is how the bad table got written. Both
+  READMEs now document the **method** per provider class rather than a verdict, and record that all twelve
+  pool providers measured reachable once probed correctly.
+
+### Added
+
+- **`tools/gate.mjs` — one command, one verdict.** An eight-gate self-check (`npm run gate` offline,
+  `npm run gate:online` adds the network gates). Gates are numbered so a failure can be cited as `G4`:
+
+  | Gate | Checks |
+  |---|---|
+  | G1 | no `dependencies`; schemastery in peer **and** dev; `NOTICE` ships with the upstream licence; patch row name matches the package |
+  | G2 | `Config` is a **live** schemastery schema (static import, no fallback path, `toJSON`, `type === 'object'`, ≥1 volatile field) |
+  | G3 | the provider directory entry uses `settingsPath: []` and `settingsNs === provider` |
+  | G4 | browser-half red lines: only `react`, no harness require, no DOM writes, no colour literals, static `inject` naming the slot owner |
+  | G5 | the test suite |
+  | G6 | the generated client table is current |
+  | G7 | pool reachability, **method-aware**: keyless providers probed anonymously, key-required ones with a bogus key, `403` reported as ambiguous |
+  | G8 | upstream drift against `tashfeenahmed/freellmapi`'s `Platform` union (`missing` is a backlog, `extra` is a defect) |
+
+  G7/G8 are **informational**, not blocking: a provider being unreachable from one network is not a defect in
+  the plugin, and making it fatal would make the gate fail on a train.
+
+- **`PROJECT-RULES.md` — the operating manual.** A PDCA loop with gates between the phases; three mechanisms
+  that let the loop run without a human (`tools/gate.mjs` for self-check, router telemetry for
+  self-optimisation, a scheduled `--online` run for self-iteration); and **eight hard rules each tied to a
+  concrete failure**, plus a lesson ledger mapping every red light to the guard that now catches it.
+
+  The rules that cost the most to learn: never degrade silently; read the shipped artifact before concluding
+  what the platform supports; a probe's method is part of the claim; upstream attribution is a licence
+  obligation; distinguish "needs a restart" from "live"; and *"registered but invisible"* is this project's
+  signature failure shape, with a fixed top-down diagnostic order.
+
+- **`docs/EXPANSION-v0.7.md` — the task brief for pool expansion**, with seven mechanically checkable
+  acceptance criteria, the corrected candidate list (probed by the right method), and risks stated as
+  unknowns rather than guesses.
+- **`docs/NEW-SESSION.md` — a paste-ready bootstrap** so the next session starts from the rules instead of
+  rediscovering them.
+
 ## [0.6.2] - 2026-10-14
 
 **Attribution fix. This package is a derived work of [freellmapi](https://github.com/tashfeenahmed/freellmapi)

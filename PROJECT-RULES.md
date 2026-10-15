@@ -1,0 +1,246 @@
+# dsh-freellmapi — 项目规则与 PDCA 循环
+
+> **这份文档是这个项目的操作手册。** 它记录的不是"我们想怎么做"，而是**我们被迫学会怎么做**——每一条规则背后都有一次具体的失败。新会话请先读它，再读 `IMPLEMENTATION.md`。
+
+---
+
+## 0. 这个项目的三个特殊性（决定了一切规则）
+
+| 特殊性 | 后果 |
+|---|---|
+| **它是 `tashfeenahmed/freellmapi` 的衍生作品**，上游活跃（几乎每天推送） | 数据会腐烂：额度、模型 id、context window、家数都在变。**必须定期与上游对拍**，不能假设去年抄的数今天还对。 |
+| **它的行为依赖外部网络**（12 家免费 provider） | 同一个版本在不同网络下表现不同。"我这里能用"不是证据。**测量方法本身必须写进断言**。 |
+| **它活在 DSH 插件契约里**，而契约大多没有文档、只能从 `app.asar` 的构建产物里读出来 | "文档没写"不等于"不支持"。**先读产物，再下结论**；读错了代价是几小时。 |
+
+---
+
+## 1. PDCA 循环：四个阶段，各自的产物与门
+
+```
+   ┌──────────────────────────────────────────────────────────────┐
+   │                                                              │
+   ▼                                                              │
+ [P] 计划 ──► [D] 执行 ──► [C] 检查 ──► [A] 处置 ─────────────────┘
+  任务书      代码+测试     tools/gate.mjs    绿灯→发布仪式
+  (验收先写)  (反向注入)   + 独立验证者      红灯→教训→守卫测试
+                                                       │
+                                                       └──► 回流到 P
+```
+
+### [P] Plan —— 验收标准必须**先于**代码写下
+
+**任务书模板**（`docs/` 里每份任务书都按这个结构）：
+
+```
+## 目标
+一句话，可证伪。不是"优化路由"，而是"把 X 从 Y 变成 Z"。
+
+## 验收标准（先写，后做）
+1. 每条都是可机械判定的（命令 + 期望输出），不是"看起来对"
+2. 必须包含一条**反向注入**：怎么证明这个测试真的会红
+3. 必须写出**方法**，不只写期望
+
+## 不做（Out of scope）
+明确划掉的东西。防止范围蔓延。
+
+## 已知风险 / 未知项
+诚实列出。"我不知道 X" 比假装知道安全。
+```
+
+**硬要求**：任何进入 [D] 的任务，其验收标准必须能在 `tools/gate.mjs` 里落地或明确说明为什么不能。**写不出机械判据的任务不进入 [D]。**
+
+### [D] Do —— 工作区内改，测试先行
+
+- 改动只发生在**工作区**（`D:\MyProject\研究学习\DSH插件\dsh-freellmapi`），profile 通过 `link:` 实时引用。
+- **每个修复都带一条守卫测试**（见 §3 规则 1）。
+- **反向注入**：写完测试后，把修复撤掉，确认测试真的会红。**不做这一步的测试是装饰**。
+  - 实例：v0.4.1 的 `dsh.client.inject` 测试、v0.5.0 的 schema 测试都做过反向注入，都确认会红。
+
+### [C] Check —— 一个命令，一个结论
+
+```bash
+node tools/gate.mjs            # 离线门（快、确定性）
+node tools/gate.mjs --online   # 加网络探测：可达性 G7 + 上游漂移 G8
+```
+
+门是**编号的**，失败可以引用为 `G4`：
+
+| 门 | 查什么 | 为什么它在 |
+|---|---|---|
+| **G1** | manifest：无 `dependencies`、schemastery 在 peer+dev、NOTICE 随包、patch 行名 == 包名 | profile 的 pnpm 会提升 `@deepseek-ai/*`，普通 dependency 会遮蔽运行时并**整档禁用**；NOTICE 是 MIT 的法定要求 |
+| **G2** | `Config` 是**活的** schemastery schema（静态 import、无回退、有 `toJSON`、`type==='object'`、≥1 个 volatile 字段） | 缺任一项 ⇒ 无 settings 命名空间 ⇒ provider **在 UI 里彻底消失但仍在路由流量** |
+| **G3** | provider 目录条目的 `settingsPath` 是 `[]`、`settingsNs === provider` | 非空路径必须指向真实子对象；指向不存在的路径会让该行被判为"未配置"⇒ 藏起来，且保存时会写入垃圾键 |
+| **G4** | 浏览器半侧：只 require react、无 `@deepseek-ai/*`、不碰 `document`、无颜色字面量、`dsh.client.inject` 是静态数组且含 slot 归属包 | 组件抛错会**把整个 slot 搞白**；`inject` 写成函数是官方记录过的坑（插件声明零依赖 ⇒ `apply()` 抛错 ⇒ 整个 bundle 被自愈禁用） |
+| **G5** | 全量测试 | — |
+| **G6** | 生成块与 `lib/providers.js` 一致 | 两份手维护的表必然漂移；生成器 + `--check` 是唯一解 |
+| **G7** | 池内 12 家的**方法感知**可达性 | 见规则 3——探测方法是断言的一部分 |
+| **G8** | 与上游 `Platform` 联合类型对拍 | 上游加家/删家时我们不知道；`extra` 是真缺陷（我们宣告了上游没有的家），`missing` 是扩展待办 |
+
+**门之外的独立验证**：涉及实质改动的声明，交付前用 `verified_progress_verify` 让**独立验证者**核一遍。本项目的记录是 5 轮 COMPLETE、1 轮因声明里塞了验证者算不出的 git blob hash 而 BLOCKED（**教训：声明的验收标准必须落在验证者能力范围内**）。
+
+### [A] Act —— 绿灯走仪式，红灯变守卫
+
+**绿灯 = 发布仪式**（顺序固定，不许跳）：
+
+```bash
+node tools/gate.mjs --online          # 1. 门全绿
+# 2. 改 package.json 版本 + CHANGELOG + 两版 README 版本标签
+node --test "tests/**/*.test.mjs"     # 3. 再跑一次测试
+git add -A && git commit -F <msg>     # 4. 提交（信息里写清根因，不写"修复 bug"）
+git push origin main && git tag -a vX.Y.Z && git push origin vX.Y.Z
+git rev-parse HEAD                    # 5. 核对 HEAD == 远端 == 标签（比完整 hash）
+```
+
+**装到 profile** 用官方路径 `plugin_manager install_bundle`（绝对目录）；**不要在 profile 目录跑 pnpm**（官方明令禁止）。注意：本包的 profile 安装是 `link:`，**改工作区代码 = 改已安装代码**，重启即生效。
+
+**红灯 = 教训 → 守卫**（这是 PDCA 里唯一能让项目真正进化的环节）：
+
+```
+红灯  ⇒  在 PROJECT-RULES.md §4「教训账本」追加一条
+      ⇒  把它变成 tools/gate.mjs 里的一条门，或 tests/ 里的一条断言
+      ⇒  如果无法机械化，明确写出"为什么只能靠人"
+```
+
+**没有变成守卫的红灯，等于没发生。**
+
+---
+
+## 2. 自检 / 自优化 / 自迭代 —— 三个机制，不是一个口号
+
+### 自检（Self-check）= `tools/gate.mjs`
+
+**已经落地，可执行。** 特征：
+
+- **方法写在断言里**，不只写期望。例：G7 的判定函数注释解释了为什么 keyless 家要**不带**头探、需 key 家要**带**假头探。
+- **信息性与阻断性分开**。G7/G8 是信息性的（记录测量结果），G1–G6 是阻断性的（红就停）。理由：provider 在你这条线路上不可达**不是插件的缺陷**，把它做成硬失败会让门在高铁上就红。
+- **JSON 输出**：`--json` 给机器读，便于将来接告警。
+
+### 自优化（Self-optimize）= 从**运行时遥测**反推池子配置
+
+插件本身已经在产生这些数据（`logRouting` 每次请求一行；`getRecentRoutes()` 保留最近路由；`lib/health.js` 维护 `effectiveFailures` 与延迟 EWMA）。**把它们变成调整建议**，而不是让人盯日志：
+
+```
+输入：最近 N 次路由（tier、胜出者、尝试过的候选数、每次尝试的结果）
+输出：一份"池子体检"
+  · 从未胜出的家        → 考虑关闭（占用候选位、拉长排序）
+  · 一直在冷却的家      → 查根因（缺 key？403？限流？）
+  · 高频走到的 tier     → 该 tier 的候选是否够宽
+  · 平均尝试次数上升    → 池子健康度下降的信号
+```
+
+**设计约束**：这是**建议**，不是自动改配置。自动改写用户配置违反"配置是用户的"原则，而且——见规则 1——静默自动调整正是本项目最贵的失败形态。
+
+### 自迭代（Self-iterate）= 定时把 [C] 跑起来
+
+用 DSH 的 `schedule_create` 建一个周期性提醒（建议每周一次），内容是**执行 [C] 并把结果落盘**：
+
+```
+每周：node tools/gate.mjs --online --json > _lead/gate-<date>.json
+      对比上一份：新增的不可达？上游新加的家？漂移的 missing 列表变了吗？
+```
+
+**为什么必须定时**：这个项目的两类关键事实都在**外部**且**会变**——上游每天推送、免费额度与封锁策略随时调整。**不定时对拍，池子就在无声地腐烂。**
+
+---
+
+## 3. 项目特有的硬规则（每条都有代价）
+
+### 规则 1：**绝不允许静默降级**
+**任何"失败就退回某个能用的东西"的分支，都必须有人为那个降级负责**：要么响亮失败，要么在降级时留下可观测证据。
+
+> **代价**：`lib/config.js` 曾用受保护的动态 `import('@deepseek-ai/schemastery')`，失败就退回普通对象，注释还写着 *a supported, silent degradation*。因为 profile 是 `link:` 安装而 Node 按 **realpath** 解析裸包名，这个 import 永远失败 ⇒ schema 降级 ⇒ **没有 settings 命名空间** ⇒ provider 在设置页**任何地方都不出现，但仍在正常路由流量**。没有报错、没有日志、没有 recovery 快照。查了几个小时，走了两轮完全错误的修复（v0.4.0 的 client half、v0.4.1 的 `inject`），根因始终是这一行回退。
+
+### 规则 2：**先读产物，再下结论**
+DSH 的插件契约大多没有文档。判断"平台支持什么"，读 `app.asar` 里的**实现**，不要读文档猜、也不要从别人类似插件的行为推断。
+
+> **代价两例**：① 我拿 `dsh-peak-hours` 当参照得出"我的 client half 与可用插件同构"——但 peak-hours 注册的是**输入框开关**，不是设置槽，它不需要那条排序边。参照物选错，结论就错。② 设置页能否编辑第三方 provider，答案在 `dsh-client-ui-settings-models/lib/client.js` 的 `layoutOf(ns)` 里——**写死的两个命名空间**，其他一律 `"unknown"` 且**禁用保存**。这个事实只能从产物里读出来。
+
+### 规则 3：**探测方法是断言的一部分**
+报告任何"可达/不可达/被封锁"的结论时，必须同时报告**怎么探的**。单次、单一方法的探测不足以支撑结论。
+
+> **代价**：v0.6.1 我在 README 写了一张"可达性表"，声称 groq 和 cerebras 被区域封锁、配 key 也没用。**方法是不带 `Authorization` 头去请求**。实际上：无头请求被边缘 WAF 拒为 403，**带上任意 Authorization 头就返回 401（= 可达，只是要真 key）**；而 keyless 家相反——**带上假 key 才返回 403**（ovh 实测 200 → 403）。用户一句"Groq 已经配置成功"就推翻了我整张表。**用正确方法重测：12 家全部可达。**
+>
+> **固化**：`tools/gate.mjs` 的 `probe()` 按 `keyless` 分流，`verdictOf()` 里对 403 明确标注"歧义：可能是拒匿名/拒假 key/真封锁，取决于发了什么"。
+
+### 规则 4：**上游署名是法定义务，不是礼貌**
+本包是衍生作品，MIT 要求版权声明与许可文本**随所有副本**分发。
+
+> **代价**：v0.6.2 之前 `LICENSE` 只有本项目自己的版权，无 `NOTICE`，`package.json` 无任何出处字段——而 `lib/providers.js` 有 **27 处**引用上游源码路径的溯源注释。**证据一直在代码里，我两次误判来源**（先按"网关适配器"讲，又错认成第三方插件的路线），正确答案是 `tashfeenahmed/freellmapi` 本身。
+>
+> **固化**：G1 断言 `NOTICE` 存在、含上游许可文本与版权人、且在 `files` 里。新增 provider 数据时，`source:` / `note:` 字段是**必填**，它就是溯源记录。
+
+### 规则 5：**装到 profile 只走官方路径**
+`plugin_manager install_bundle`（绝对目录）。**不要**手写 profile 的 `package.json` / `cordis.patch.yml`，**不要**在 profile 目录跑 pnpm。
+
+> **注意一个已知陷阱**：`pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 里**同一个包名出现两次**会毒化整个 profile，之后**每次**安装都失败（知识库 `unfixed-issues.md` T11 有载）。修法是把重复条目合并成一条（**不减少任何豁免**）。
+
+### 规则 6：**区分"需要重启"与"即时生效"**
+- **需要重启**：客户端半侧（`dsh.client`）、`cordis.patch.yml` 行、`Config` 的 schema 结构。
+- **即时生效**：凭据写入（credentials 服务读取时不缓存）。`install_bundle` 返回 `application: "restart-required"` 就是"尚未生效"。
+
+### 规则 7：**"注册了但看不见"是本项目的高频失败形态**
+一个 provider 可以**同时在**"路由完全正常"和"UI 里任何地方都不出现"两种状态。诊断顺序固定：
+
+```
+① 有 settings 命名空间吗？   → G2
+② provider 目录条目对吗？     → G3
+③ 在 Models 页的行列表里吗？  → configured 需要命名空间存在
+④ 在"+ 添加模型提供商"里吗？  → addable 也需要命名空间存在
+⑤ 槽渲染了吗？              → settings.models.provider-card 按 entryKey=settingsNs 派发
+```
+**①②不满足时，③④⑤全都不会触发**——所以从上往下查，不要从 UI 现象反推。
+
+### 规则 8：**偶发失败必须诊断，不许重试掩盖**
+测试套件有一个低频偶发（约 25 次全量运行出现 2 次，症状是"mock 收到 0 个请求但流正常结束"，隔离跑 200 次复现不出，只在系统有负载时出现）。**它至今未解决，且被明确记录为未解决**，诊断脚本留在 `_lead/flake-probe.mjs`。
+
+**报告测试结果时必须说清口径**："411/411" 指的是**干净运行**的结果，不是确定性。
+
+---
+
+## 4. 教训账本（Lesson ledger）
+
+**每条红灯都要在这里留一行，并指向固化成的那条门或断言。**
+
+| # | 日期 | 症状 | 根因 | 固化成 |
+|---|---|---|---|---|
+| L1 | 2026-10-14 | 设置卡片整块不出现，无报错无日志 | 受保护的动态 import 失败 ⇒ `Config` 静默降级 ⇒ 无 settings 命名空间 | G2；`tests/config.test.mjs` 断言 `configSchemaKind === 'schemastery'`（旧版**在非 schemastery 时直接 return**，所以它在整个 bug 期间一直"通过"） |
+| L2 | 2026-10-14 | 补完 `dsh.client.inject` 卡片仍不出现 | 参照物选错（peak-hours 注册的不是设置槽）；真正原因是 L1 | 规则 2；G4 断言 `inject` 含 slot 归属包 |
+| L3 | 2026-10-14 | @ 添加模型提供商 弹窗里能选到我，但只有一个下拉框、保存禁用 | `layoutOf(ns)` 写死两个命名空间 | 规则 2；写进 `docs/` 与 README 的"上游与致谢"相邻说明 |
+| L4 | 2026-10-14 | 保存会写入垃圾 `providers.freellmapi` | `settingsPath` 指向不存在的路径 | G3；`tests/adapter.test.mjs` 断言 `settingsPath` 为 `[]` 且不含 `providers` |
+| L5 | 2026-10-14 | README 声称 groq/cerebras 被区域封锁 | 探测未带 Authorization 头 | G7 的方法感知探测；规则 3 |
+| L6 | 2026-10-14 | 上游署名缺失 | 移植了实质性部分却只在"gateway 模式"语境提及上游 | G1；`NOTICE` |
+| L7 | 2026-10-13 | profile 每次安装插件都失败 | `minimumReleaseAgeExclude` 里 `dshmarket` 出现两次（T11 毒化模式） | 规则 5；已备份 `pnpm-workspace.yaml` |
+| L8 | 2026-10-14 | 门自己红了两次 | 我用原始 Windows 路径去 `import()`（需要 `pathToFileURL`） | 门自己抓到的——**这就是门存在的意义** |
+
+---
+
+## 5. 与上游的关系（长期维护的核心）
+
+```
+上游 tashfeenahmed/freellmapi (MIT, TypeScript)
+   │  Platform 联合类型 = 权威家数（当前 70，含 custom）
+   │  README 的 catalog 段 = 权威免费目录数（34 家 / 474 模型族 / 635 端点）
+   ▼
+本包 (JavaScript, DSH LlmAdapter)
+   ├─ lib/providers.js   转录上游目录，逐条带 source:/note:
+   ├─ lib/health.js      沿用上游冷却阶梯
+   └─ lib/router.js      DSH seam 上的路由实现
+```
+
+**每次 [C] 都要跑 G8**：上游加家 ⇒ 进扩展待办；上游删家 ⇒ 我们是否还在宣告一个不存在的家（**这是真缺陷**）；上游改 id/额度 ⇒ 我们的转录腐烂了。
+
+**判据**：`missing` 是**待办**，`extra` 是**缺陷**。两者的处理方式完全不同，不要混。
+
+---
+
+## 6. 快速索引
+
+| 我要… | 去哪 |
+|---|---|
+| 跑一遍全部检查 | `node tools/gate.mjs --online` |
+| 看池子体检建议 | `lib/routes.js` 的 `getRecentRoutes()` + `logRouting` 日志 |
+| 加一家 provider | `docs/EXPANSION-v0.7.md`（任务书）→ `lib/providers.js` → 生成器 → G1/G6/G7 |
+| 判断 UI 为什么没显示 | 规则 7 的五步固定诊断顺序 |
+| 发布 | §1 的[A]发布仪式 |
+| 新会话起步 | `docs/NEW-SESSION.md` |
+| 设计说明与每一处刻意偏离 | `IMPLEMENTATION.md` |

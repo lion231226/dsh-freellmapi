@@ -48,7 +48,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.6.2   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.6.3   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -158,41 +158,44 @@ key 是性价比最高的一步：默认候选池是 `groq`、`cerebras`、`open
 > 那份表是**构建时**按默认值生成的，所以你自己通过 `providers.<id>.enabled` 打开的家**不会**长出密钥
 > 行——那种情况请直接设置它的 `apiKeyEnv` 并存好凭据。
 
-### 哪些家在你的网络里真的可达
+### 哪些家可达 —— 以及**该怎么问**
 
-免费额度对地域敏感，而默认开启的两家在某些网络里是**硬封**的。2026-10-14 从中国大陆线路实测，对每家发
-一次**不带凭据**的 `GET {baseURL}/models`：
+免费额度对网络敏感，所以这一节给的是**测量方法**，不是让你相信的结论。它此前那张表声称 `groq` 与
+`cerebras` 被区域封锁、"配 key 也没用"——**那张表是错的**，而错因值得留着：那次探测**没带
+`Authorization` 头**。2026-10-15 实测：
 
-| Provider | 结果 | 解读 |
+| Provider | 不带凭据 | 语法合法但无效的 key |
 |---|---|---|
-| `groq` | **HTTP 403** | 该网络被封——**封的是 API，不只是网页**。配 key 没有任何用。 |
-| `cerebras` | **HTTP 403** | 同上。 |
-| `openrouter` | HTTP 200，约 0.5s | 可达且快（连测 5/5 全过）。 |
-| `kilo` | HTTP 200 | 可达，免凭据。 |
-| `llm7` | HTTP 200 | 可达，免凭据。 |
-| `ovh` | HTTP 200 | 可达，免凭据。 |
-| `nvidia` | HTTP 200 | 可达；补全仍需 key。 |
-| `github` | HTTP 200 | 可达；需要 token。 |
-| `mistral` | HTTP 401 | 可达，需要 key。 |
-| `zhipu` | HTTP 401 | 可达，需要 key——**注册不需要翻墙**。 |
-| `volcengine` | HTTP 401 | 可达，需要 key（国内控制台）。 |
-| `longcat` | HTTP 401 | 可达，需要 key。 |
+| `groq` | HTTP **403** | HTTP **401** → 可达，只是要真 key |
+| `cerebras` | HTTP **403** | HTTP **401** → 可达 |
+| `ovh`（免凭据） | HTTP **200** | HTTP **403** → **给免凭据的家塞 key 反而把它弄挂了** |
 
-`401` 是"要 key 的家"给出的**健康**答复：端点存在、礼貌拒绝。而 `403` 且**不带 Cloudflare 响应头**，
-说明运营方在鉴权之前就拒绝了——那是 IP/地域判定，不是凭据问题；这也解释了为什么网页和 API 同时挂。
+**所以 `403` 从不自解释。** 它取决于你发了什么，可能是三件完全不同的事：*拒绝匿名请求*、*拒绝凭据*、
+*拒绝区域*。只报其中一个，就是那张错表的由来。
 
-所以被封锁的家在你换出口线路之前**不值得配 key**。要让路由器不再为它浪费一次尝试，关掉它即可——全部改动
-就在 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`（或插件自己的 `providers` 字段）：
+**按家分流，正确探测：**
+
+- **免凭据**家（`llm7`、`kilo`、`ovh`）——**不要**发 `Authorization` 头；`200` 才健康。
+- **需要 key** 的家——发一个**语法合法但无效**的 `Authorization: Bearer …`；`401` 是健康的
+  （端点存在、礼貌拒绝），`200` 也好。
+- **`403` 一律视为歧义**：必须换另一种方法再探一次，它才有意义。
+- `404`/`400`/`422` 通常说明路径不同，不是主机不可达。
+
+门把这套自动化了：`node tools/gate.mjs --online` 的 **G7** 会按每家适合的方法探测，并在结果旁**打印
+所用方法**——结论可被审计，而不是只能被相信。
+
+按此方法在 2026-10-15 实测：**池内 12 家全部可达**，0 家不可达，包括旧表里被称为"被封锁"的那两家。
+而当某家在你的网络里**确实**不可达时，关掉它就是全部改动，写进
+`$DSH_HOME/profiles/<profile>/cordis.patch.yml`（或插件自己的 `providers` 字段）：
 
 ```yaml
 - id: freellmapi
   config:
     providers:
-      groq: { enabled: false }
-      cerebras: { enabled: false }
+      someprovider: { enabled: false }
 ```
 
-同日实测可达的申请页（其中三家此前是空的）：`groq` <https://console.groq.com/keys>、
+申请页（2026-10-14 实测可达）：`groq` <https://console.groq.com/keys>、
 `cerebras` <https://cloud.cerebras.ai/>、`openrouter` <https://openrouter.ai/keys>、
 `mistral` <https://console.mistral.ai/api-keys>、`zhipu` <https://open.bigmodel.cn/usercenter/apikeys>、
 `volcengine` <https://console.volcengine.com/ark>、`longcat` <https://longcat.chat/platform/api_keys>。
@@ -824,7 +827,7 @@ providers:
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.6.2` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.6.3` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立
@@ -853,7 +856,10 @@ dsh-freellmapi/
 │   ├── sse.js / frames.js / translate.js   # SSE → DSH StreamChunk
 │   ├── errors.js / routes.js / catalog.js / runtime.js / types.js
 ├── tests/              # 离线测试（411 个）
+├── tools/gate.mjs      # 项目自检门 —— 一个命令、一个结论（npm run gate）
+├── docs/               # EXPANSION-v0.7.md（任务书）· NEW-SESSION.md（新会话引导词）
 ├── IMPLEMENTATION.md   # 设计说明，含每一处刻意偏离
+├── PROJECT-RULES.md    # 操作手册：PDCA 循环、八条硬规则、教训账本
 ├── README.md / README-zh.md / CHANGELOG.md / NOTICE / LICENSE
 └── .github/workflows/ci.yml
 ```

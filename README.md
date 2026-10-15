@@ -50,7 +50,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.6.2   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.6.3   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -167,44 +167,48 @@ convention `<PROVIDER_ID>_API_KEY`. Empty values count as "not configured".
 > provider you enable yourself through `providers.<id>.enabled` will **not** grow a key row — set its
 > `apiKeyEnv` and store the credential directly in that case.
 
-### Which providers are actually reachable
+### Which providers are actually reachable — and how to ask
 
-Free-tier access is region-sensitive, and two of the default-enabled providers are hard-blocked from some
-networks. Measured from a mainland-China connection on 2026-10-14, with an unauthenticated
-`GET {baseURL}/models` per provider:
+Free-tier access is network-sensitive, so this section tells you **how to measure**, not what to believe.
+It previously carried a table claiming `groq` and `cerebras` were region-blocked "and a key changes
+nothing". **That table was wrong**, and the reason is worth keeping: the probe sent **no `Authorization`
+header**. Measured 2026-10-15:
 
-| Provider | Result | Reading |
+| Provider | No credential | Syntactically valid but bogus key |
 |---|---|---|
-| `groq` | **HTTP 403** | Blocked for this network — **the API, not just the console**. A key changes nothing. |
-| `cerebras` | **HTTP 403** | Same. |
-| `openrouter` | HTTP 200, ~0.5 s | Reachable and fast (5/5 probes). |
-| `kilo` | HTTP 200 | Reachable, keyless. |
-| `llm7` | HTTP 200 | Reachable, keyless. |
-| `ovh` | HTTP 200 | Reachable, keyless. |
-| `nvidia` | HTTP 200 | Reachable; still needs a key for completions. |
-| `github` | HTTP 200 | Reachable; needs a token. |
-| `mistral` | HTTP 401 | Reachable, needs a key. |
-| `zhipu` | HTTP 401 | Reachable, needs a key — registration needs no foreign network. |
-| `volcengine` | HTTP 401 | Reachable, needs a key (mainland console). |
-| `longcat` | HTTP 401 | Reachable, needs a key. |
+| `groq` | HTTP **403** | HTTP **401** → reachable, it just wants a real key |
+| `cerebras` | HTTP **403** | HTTP **401** → reachable |
+| `ovh` (keyless) | HTTP **200** | HTTP **403** → *sending a key breaks a keyless provider* |
 
-`401` is the healthy answer from a provider that wants a key: the endpoint exists and refused politely.
-`403` **with no Cloudflare headers** means the operator rejected the request before authentication — an
-IP/region decision, not a credential problem, which is why the console page and the API fail together.
+So **a 403 is never self-explanatory.** It means one of three different things depending on what you sent:
+*anonymous request rejected*, *credential rejected*, or *region rejected*. Reporting one without the other is
+how the wrong table got written.
 
-A blocked provider is therefore not worth a key until traffic leaves through a different route. To stop the
-router from spending an attempt on one, turn it off — the whole change, in
-`$DSH_HOME/profiles/<profile>/cordis.patch.yml` (or the plugin's own `providers` field):
+**Probe correctly, per provider:**
+
+- **keyless** providers (`llm7`, `kilo`, `ovh`) — send **no** `Authorization` header; `200` is healthy.
+- **key-required** providers — send a syntactically valid but **bogus** `Authorization: Bearer …` header;
+  `401` is healthy (the endpoint exists and refused politely), `200` is fine too.
+- Treat `403` as **ambiguous**: it needs a second probe with the other method before it means anything.
+- `404`/`400`/`422` usually mean the path differs, not that the host is down.
+
+The gate automates exactly this: `node tools/gate.mjs --online` → **G7** probes every pool provider with the
+method that suits it and prints the method beside each result, so the verdict can be audited rather than
+trusted.
+
+Measured this way on 2026-10-15, **all 12 pool providers were reachable** — 0 unreachable, including the two
+the old table called blocked. And when a provider genuinely is unreachable from your network, turning it off
+is the whole change, in `$DSH_HOME/profiles/<profile>/cordis.patch.yml` (or the plugin's own `providers`
+field):
 
 ```yaml
 - id: freellmapi
   config:
     providers:
-      groq: { enabled: false }
-      cerebras: { enabled: false }
+      someprovider: { enabled: false }
 ```
 
-Key request pages verified reachable on the same date, including the three that had none before:
+Key request pages (verified reachable on 2026-10-14):
 `groq` <https://console.groq.com/keys>, `cerebras` <https://cloud.cerebras.ai/>,
 `openrouter` <https://openrouter.ai/keys>, `mistral` <https://console.mistral.ai/api-keys>,
 `zhipu` <https://open.bigmodel.cn/usercenter/apikeys>, `volcengine` <https://console.volcengine.com/ark>,
@@ -908,7 +912,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.6.2` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.6.3` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package
@@ -938,7 +942,10 @@ dsh-freellmapi/
 │   ├── sse.js / frames.js / translate.js   # SSE → DSH StreamChunk
 │   ├── errors.js / routes.js / catalog.js / runtime.js / types.js
 ├── tests/              # offline tests (411 of them)
+├── tools/gate.mjs      # the project gate — one command, one verdict (npm run gate)
+├── docs/               # EXPANSION-v0.7.md (task brief) · NEW-SESSION.md (bootstrap)
 ├── IMPLEMENTATION.md   # design notes, including every deliberate deviation
+├── PROJECT-RULES.md    # operating manual: PDCA loop, 8 hard rules, lesson ledger
 ├── README.md / README-zh.md / CHANGELOG.md / NOTICE / LICENSE
 └── .github/workflows/ci.yml
 ```
