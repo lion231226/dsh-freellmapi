@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.14] - 2026-10-15
+
+**The `toolCalling` contradiction is closed — both routes agree, on evidence.**
+
+### Fixed
+
+- **`cohere/north-mini-code:free` declared `toolCalling: false` on the `kilo` route.** The kilo gateway is
+  **keyless**, so it could be measured anonymously: a one-tool request returned a structured `tool_calls` entry
+  with valid JSON and the required argument present (control HTTP 200). The row now says `true`.
+
+  This closes a contradiction the pool had recorded honestly rather than papered over. It surfaced as "our
+  `false` vs OpenRouter's `supported_parameters` containing `tools`"; the OpenRouter side was then measured
+  `true`, and the correct reading **at that point** was "two endpoints, two facts — leave kilo alone". Only after
+  measuring the kilo endpoint itself did both sides agree. **The intermediate position was not wrong; it was
+  what the evidence supported until more evidence arrived**, and the note in `lib/providers.js` now records that
+  sequence rather than just the final value.
+
+### Measured, and left alone
+
+Anonymous tool probe over the two keyless providers:
+
+| provider | model | result |
+|---|---|---|
+| `kilo` | `cohere/north-mini-code:free` | **TOOLS OK** → row corrected |
+| `kilo` | `nvidia/nemotron-3-super-120b-a12b:free` | TOOLS OK (already true) |
+| `kilo` | `nvidia/nemotron-3-ultra-550b-a55b:free` | TOOLS OK (already true) |
+| `kilo` | `poolside/laguna-s-2.1:free` | **NOT MEASURED** (HTTP 429 control) |
+| `llm7` | `codestral-latest` | TOOLS OK |
+| `llm7` | `DeepSeek-V4-Flash-0731` | **NOT MEASURED** (HTTP 429 control) |
+
+`poolside/laguna-s-2.1:free` on kilo and the llm7 row stay unchanged: a 429 is an absence of measurement, and
+this release does not turn one into a declaration.
+
+Suite **460 passed, 0 failed**; gate G1–G10 PASS offline and online.
+
 ## [0.7.13] - 2026-10-15
 
 **OpenRouter's pool tripled from 4 to 7 models, and the provider got its vision back — all of it measured,
