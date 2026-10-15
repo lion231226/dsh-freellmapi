@@ -263,6 +263,77 @@ if (ONLINE) {
 }
 
 // ---------------------------------------------------------------------------
+// G10 — model-id coverage (what a provider SERVES vs what we transcribed)
+// ---------------------------------------------------------------------------
+
+if (ONLINE) {
+  const coverage = await (async () => {
+    const { providerDeclarations } = await import(moduleUrl('lib/providers.js'))
+    const rows = []
+    for (const d of providerDeclarations({})) {
+      // Only a provider whose catalogue is readable WITHOUT a credential can be
+      // checked id-by-id here. A keyed provider answers 401 to this probe, and
+      // "401" is not evidence that an id is missing — so it is recorded as
+      // unchecked rather than silently passed. This is the honest half of the
+      // check; the other half needs a real credential.
+      const result = await probe(d.id, d.baseURL, d.keyless === true)
+      if (result.status !== 200) {
+        rows.push({ provider: d.id, checked: false, reason: `catalogue not readable anonymously (HTTP ${result.status ?? result.error})` })
+        continue
+      }
+      let served = null
+      try {
+        const response = await fetch(`${d.baseURL.replace(/\/$/, '')}/models`, {
+          headers: { 'user-agent': 'dsh-freellmapi-gate/1.0' },
+          signal: AbortSignal.timeout(15_000),
+        })
+        const body = await response.json()
+        const list = Array.isArray(body?.data) ? body.data : (Array.isArray(body?.models) ? body.models : null)
+        if (list !== null) served = new Set(list.map((m) => String(m?.id ?? m?.name ?? '')).filter((id) => id.length > 0))
+      } catch {
+        served = null
+      }
+      if (served === null) {
+        rows.push({ provider: d.id, checked: false, reason: 'catalogue body had no recognisable model list' })
+        continue
+      }
+      const missing = (d.models ?? []).map((m) => m.id).filter((id) => !served.has(id))
+      rows.push({ provider: d.id, checked: true, enabled: d.enabled === true, served: served.size, declared: (d.models ?? []).length, missing })
+    }
+    return rows
+  })()
+
+  const checked = coverage.filter((r) => r.checked === true)
+  const unchecked = coverage.filter((r) => r.checked !== true)
+  // A dead id in a DEFAULT-ENABLED provider is a live defect: the plugin ships a
+  // row the router may pick, and it 404s. Four dead OpenRouter ids (0.7.1) and two
+  // dead groq ids (0.7.8) were both that shape, both found by a human — which is
+  // why this gate exists.
+  const liveDead = checked.filter((r) => r.missing.length > 0 && r.enabled === true)
+  // A dead id in a DEFAULT-DISABLED provider cannot be routed, so it is latent: it
+  // becomes live the moment someone enables that provider, and then this same
+  // assertion blocks. Reported, not blocking — a red nobody can act on is noise,
+  // and "loosen the threshold until it goes green" is precisely what this project
+  // forbids. Fixing nvidia's rows needs an NVIDIA credential to measure
+  // replacements against (its catalogue serves no qwen at all and its newest llama
+  // is 3.1), so it is recorded as work rather than papered over.
+  const latentDead = checked.filter((r) => r.missing.length > 0 && r.enabled !== true)
+
+  assert(
+    liveDead.length === 0,
+    `an enabled provider declares model ids it does not serve: ${liveDead.map((r) => `${r.provider}: ${r.missing.join(', ')}`).join('; ')}`,
+  )
+  const latentNote = latentDead.length === 0
+    ? ''
+    : `; ${latentDead.length} disabled provider(s) carry dead ids (latent until enabled): ${latentDead.map((r) => `${r.provider}: ${r.missing.join(', ')}`).join('; ')}`
+  record('G10', 'declared model ids are served (method: compare each id against GET /models; credential-free catalogues only)', true,
+    `${checked.length} catalogue(s) checked, ${liveDead.length} enabled with dead ids`
+    + `${unchecked.length === 0 ? '' : `; ${unchecked.length} unchecked anonymously (${unchecked.map((r) => r.provider).join(', ')})`}`
+    + latentNote)
+  results[results.length - 1].rows = coverage
+}
+
+// ---------------------------------------------------------------------------
 // G8 — upstream drift
 // ---------------------------------------------------------------------------
 
@@ -362,9 +433,19 @@ if (JSON_OUT) {
         console.log(`        ${String(row.id).padEnd(50)} ${String(row.upstream).padEnd(15)} age=${String(row.age).padStart(4)}d  ${String(row.evidence).padEnd(8)} ${row.freeVerdict}`)
         continue
       }
+      // G10 rows carry the id-coverage shape: which ids a catalogue actually serves.
+      if (row.checked !== undefined) {
+        const verdict = row.checked !== true
+          ? `not checked — ${row.reason}`
+          : (row.missing.length === 0
+              ? `all ${row.declared} id(s) served (of ${row.served} in the catalogue)`
+              : `DEAD IDS: ${row.missing.join(', ')}${row.enabled === true ? '' : '  (latent — provider disabled)'}`)
+        console.log(`        ${String(row.provider).padEnd(13)} ${verdict}`)
+        continue
+      }
       console.log(`        ${row.provider.padEnd(13)} ${String(row.status ?? '—').padEnd(5)} ${row.method.padEnd(10)} ${verdictOf(row)}${row.enabled ? '' : '  (disabled by default)'}`)
     }
   }
-  console.log(`\n  ${failed.length === 0 ? 'PASS' : `FAIL — ${failed.map((r) => r.id).join(', ')}`}${ONLINE ? '' : '   (offline; add --online for G7/G8)'}\n`)
+  console.log(`\n  ${failed.length === 0 ? 'PASS' : `FAIL — ${failed.map((r) => r.id).join(', ')}`}${ONLINE ? '' : '   (offline; add --online for G7/G8/G9/G10)'}\n`)
 }
 process.exit(failed.length === 0 ? 0 : 1)

@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.9] - 2026-10-15
+
+**A gate for the defect class that shipped three times: a model id we declare that the provider does not serve.**
+
+### Added
+
+- **Gate G10 — declared model ids are served.** For every provider whose catalogue is readable without a
+  credential, it compares each model id we ship against what `GET /models` actually offers. Unlike G7/G8 it is
+  **blocking for a default-enabled provider**, because a dead id there is a row the router may pick and that
+  answers 404 — not a property of this network.
+
+  It found a third instance the moment it ran: **`nvidia` declares `meta/llama-3.3-70b-instruct` and
+  `qwen/qwen3-coder-480b-a35b-instruct`, and its catalogue serves neither** (80 models; it serves no qwen at
+  all, and its newest llama is 3.1). Those rows are **latent, not live** — `nvidia` is disabled by default, so
+  nothing routes to them — and G10 reports them as latent while blocking the moment that provider is enabled.
+  Fixing them needs an NVIDIA credential to measure replacements against, so it is recorded as work rather than
+  papered over with invented capability numbers.
+
+  Current reading: **9 catalogues checked, 0 enabled providers with dead ids**, 9 unchecked anonymously
+  (keyed providers answer 401 to an anonymous probe, and "401" is not evidence that an id is missing).
+
+### Notes on scope
+
+- **Why this took three rounds to notice.** 0.7.1 fixed four dead OpenRouter ids and 0.7.8 two dead groq ids —
+  both found by a human, both the same shape. G7 probes *provider-level* reachability and never compared a
+  *model id* against the served set, so the whole class was invisible to the gate. That is the gap this closes,
+  and it closes it only for credential-free catalogues: the keyed half still needs a credential present.
+- **Blocking vs informational is a deliberate split, not a compromise.** A red nobody can act on is noise, and
+  "loosen the threshold until it goes green" is what this project forbids. Hence: enabled provider with a dead
+  id blocks; disabled provider with a dead id is reported and will block the moment it is enabled.
+- **The renderer needed a shape branch** for G10's rows (id-coverage) alongside G9's (drift) and G7's
+  (reachability). Found by running it, not by reading it.
+
 ## [0.7.8] - 2026-10-15
 
 **Two of groq's three models had been retired upstream and were still shipped as default-on.** Measured with a
