@@ -44,11 +44,17 @@ itself wrong once before it was right.**
   load-bearing, and pins that its fixture really does produce a row so it cannot pass vacuously. Two of the
   three injections redden the guard; the third is **reported as INERT by the harness**, not counted.
 
-- **A suite flake is real and still undiagnosed.** The full suite failed once in four runs, then passed eight
-  times in a row (~1 in 12 overall). It is the same intermittent behaviour previously noted at
-  `tests/direct.test.mjs:401` ("a cooled-down provider is skipped", mock receives 0 requests). It is **not**
-  masked by a retry, and its name was not captured in this round; it stays on the list as an open defect rather
-  than being retried green.
+- **A suite flake is real and still undiagnosed — but now narrowed.** The full suite failed once in four runs,
+  then passed fifteen more full-suite runs and was not seen again (~1 in 19 overall). The same suspect that was
+  previously noted, `tests/direct.test.mjs` "a cooled-down provider is skipped on the next request", **passes
+  25 times out of 25 when run alone** (`--test-name-pattern`), which rules out an intrinsically flaky
+  assertion and points at **cross-test interference inside the full run** — timing, port reuse, or shared
+  module state — rather than at that test's own logic.
+
+  Recorded with its measurements: it is **not** masked by a retry, its name was still not captured, and the
+  narrowing is the useful part of this round's attempt. Next step is a full-suite loop with the failing test
+  name captured (roughly 19 runs per capture), not further isolated repetition, which has now been shown not
+  to reproduce it.
 
 ## [0.7.10] - 2026-10-15
 
