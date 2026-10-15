@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added — `lib/telemetry.js`, NOT yet wired in
+
+**The module that closes §2's telemetry gap exists and is guarded, but nothing calls
+it yet.** Recorded here rather than under a version number on purpose: an uncalled
+module is not a feature, and shipping it as one would overstate what a user gets.
+
+What it does: folds route records into a bounded, aggregate-only summary
+(`requests`, `failures`, `attemptsTotal`/`attemptsMax`, per-tier and per-provider
+counts) and persists it on an opt-in, throttled schedule, plus `deriveAdvice()` which
+turns a summary into the findings §2 asks for ("never wins", "attempts rising", the
+dominant tier). `readTelemetry()` returns **`null` for a missing file** so that *no
+telemetry* stays distinguishable from *telemetry says zero* — conflating those would
+report an idle pool as a healthy one.
+
+Design decisions, each deliberate: **off by default** (persisting a file is a side
+effect, and rule 1 says every side effect needs someone answerable for it);
+**aggregates only, never text** (a `reasons` array on the real record is dropped, so
+a telemetry file can never start carrying conversation content — asserted
+structurally, because adding one field is how that rule would be lost); **a bounded
+window, not a log**; **throttled writes with no timer** (a timer would keep the
+process alive and need lifecycle hooks); and **it never throws into a request**,
+inheriting the rule `lib/index.js` already states for its own reporting.
+
+Guarded by 8 tests and, per §1 [D], **proved able to fail**: reverse injection gives
+**PROVEN 3/3** with a green control — ignoring the opt-in switch, collapsing the
+no-data distinction, and stopping the attempt tally each redden the guard.
+
+**Still to do before this is a feature**: wire it in `lib/index.js` at the existing
+`onRoute` callback (the record already carries `tier`, `provider`, `model`,
+`candidateCount`, `attempts`), add the two `Config` fields (`telemetry`,
+`telemetryPath`), and have `tools/pipeline.mjs` consume the file instead of printing
+its gap line. None of that changes routing behaviour, which is why it can land
+separately.
 
 ## [0.7.16] - 2026-10-15
 
