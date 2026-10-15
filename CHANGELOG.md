@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.2] - 2026-10-15
+
+**A context-summarisation call is not an ordinary request, and routing it like one made compaction fail
+forever.**
+
+### Fixed
+
+- **The two ways a compaction could never succeed are both closed.** DSH compresses a long session by asking
+  a model to summarise the span it is about to drop, so that call carries the *whole history being
+  compressed* as its input. Two failure modes were measured on 2026-10-15 from a durable session log:
+
+  1. The call was routed to a 262,144-token model with about 297,538 tokens of input: `maximum context length
+     is 262144 tokens. However, you requested about 297538 tokens`. It could not succeed at any retry, and the
+     session never got smaller.
+  2. Two further attempts failed with `SETUP_REQUIRED` for the model id `setup:groq` — a **guidance row**,
+     which is not a model at all. The session's active route was that row, so the summary inherited it.
+
+  A summary call now **routes across the pool like `auto` does** (a guidance row is no longer a valid target
+  for it, while it stays the correct answer for a normal step — that branch is untouched and still guarded),
+  and it is subject to an absolute **capacity floor**: `routing.compactionMinContextWindow`, default
+  **262,144**, applied only to the summary path. A model that cannot hold a large context at all cannot write
+  the summary, whatever this request's estimate happens to be.
+
+- **When the pool has nothing above the floor, the compaction fails loudly and says why** — naming the floor
+  and the model it excluded. Silence was the original defect: the retry loop was unbounded *because* every
+  attempt failed without anyone being able to see what was wrong.
+
+### Added
+
+- **`routing.compactionMinContextWindow`** (default `262_144`, `0` disables). The relative
+  `contextSafetyFactor` gate cannot substitute for it: an estimate undercounts, and a summary call must fit
+  *after* the compaction it is performing.
+
+- **`tests/compaction-routing.test.mjs`** — four guards: a summary pinned to a guidance row is served across
+  the pool while the same row still returns `SETUP_REQUIRED` on a normal step; a summary skips a model below
+  the floor; the floor does not narrow the ordinary path; and an unservable summary fails with a capacity
+  message rather than hanging.
+
+### Notes on scope
+
+- **The floor is not a copy of DSH's own threshold.** DSH decides *when* to compact from the capacity the
+  adapter declares; this floor decides only *which model may write the summary*. They are different questions
+  and are allowed to disagree.
+- **`purpose` reaching the adapter was verified before it was relied on.** `GenerateOptions.purpose` is
+  declared as `'compaction' | 'session-title'`, and `dsh-compaction-basic`'s summarisation call sets
+  `purpose: "compaction"` literally. It is **not** persisted in the request header, so its absence from the
+  session log is not evidence of its absence at runtime — an earlier note in this project ("sessionId/purpose
+  unmapped") was read as the latter and would have ruled this fix out.
+- **Reverse injection run on a copy, not in the working tree**: 4/4 injected defects reddened the intended
+  guard, with the copy's sha256 compared before and after each injection. The first attempt at this run
+  reported 4/4 reds **whose real cause was a missing `node_modules` in the copy** — a control run exposed it,
+  and the harness now links the real tree and asserts the control is green before injecting.
+
 ## [0.7.1] - 2026-10-15
 
 **Four "free" OpenRouter models were not free — they were not served at all. The word now costs evidence.
