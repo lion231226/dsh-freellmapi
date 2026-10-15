@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.5] - 2026-10-15
+
+**An agent-session harness — and it found a real defect on its first run.**
+
+### Added
+
+- **`tests/agent-session.test.mjs`** drives a *growing* conversation through the adapter turn by turn, because
+  every guard until now checked a single request and the reported problem is about what happens as a session
+  grows. Four assertions:
+
+  - a session that outgrows the cheap model **stops being routed to it**, and the small model is never sent a
+    request it cannot hold (an upstream 400 is the failure being prevented, not the symptom);
+  - a summary call in a grown session is served **only** by a model that can hold the history being summarised
+    — the 0.7.2 fix, now asserted across a session instead of one call;
+  - one streamed answer never mixes two providers (the invariant `dispatch.js` documents);
+  - the capacity `auto` declares to DSH covers every model the session can actually route to.
+
+  The pool is deliberately the shape that broke: a small-window model that wins on capability and speed, plus
+  two larger ones that do not.
+
+### Known gap (named, not hidden)
+
+- **The fourth assertion fails, and that is the finding: `auto` declares
+  `contextWindow: 131072` while the router serves a `32000`-token model** — and it does so for every plain
+  request. DSH budgets its compaction threshold from the declared capacity (131,072 gives a threshold of
+  65,536), so a session may grow to ~65k against a model that holds 32k. The 0.7.2 work stops that from
+  *failing* — the per-request gate moves the turn to a wider model — but the declaration still overstates what
+  routing may pick, so a session is steered to the edge and then has to fail over at it.
+
+  The fix is the semantic change tracked as **P2**: declare a capacity routing cannot undercut
+  (`min(pool, config)`, clamped to a floor just above DSH's 65,536-token headroom, with smaller models excluded
+  from `auto`). It changes what `config.contextWindow` *means*, which this project requires sign-off for, so
+  the test ships **skipped with the defect named in it** rather than deleted, and rather than loosened until it
+  agreed with the code — a guard edited until it passes measures nothing.
+
+### Notes on scope
+
+- **The skip is a recorded defect, not a pass.** `node --test` reports it as `skipped 1`; G5 counts it as
+  neither a pass nor a failure, and the reason string names the defect, the values involved, and the tracked
+  fix.
+
 ## [0.7.4] - 2026-10-15
 
 **`reasoning_effort` was sent to every provider. Whether any of them accept it was never established, so it is
