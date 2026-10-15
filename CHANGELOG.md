@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.10] - 2026-10-15
+
+**`auto` ignores thinking effort. The READMEs said nothing about it, so a profile set to `max` looked
+meaningful and was not.**
+
+### Documented
+
+- **"Thinking effort (`reasoningEffort`) has no effect on `auto`"** — added to both READMEs. `auto` stands for
+  a whole pool that includes models which cannot reason at all, and DSH validates a requested effort against
+  the set a model **declares**. For a synthetic route there is no honest set to declare: any set wide enough to
+  be useful would be silently ignored whenever the router happened to pick a model that does not honour it —
+  the silent-degradation shape this plugin exists to avoid.
+
+  The section says what actually happens (`reasoning_effort` withheld by default, the withholding logged), that
+  a profile-level `reasoningEffort: max` therefore does nothing on `auto`, and what to do instead — pin a
+  specific model and set `forwardReasoningEffort: true` — with the measured caveat that the vocabulary is
+  **per model** (Groq accepts `low`/`medium`/`high` and rejects the rest by explicit allowlist;
+  `qwen/qwen3.8-27b` also accepts `none`, both `gpt-oss` models do not).
+
+### Notes on scope
+
+- **The declaration was deliberately not implemented, and that is the finding.** The measurements needed are in
+  hand. But declaring a reasoning set on `auto` would recreate exactly the silent drop that 0.7.4 removed —
+  just through a different door: the effort would pass validation and then be discarded by whichever pool model
+  answered. There is no "neither silent nor fatal" middle for a synthetic route, so the honest split is:
+  **declare per concrete model** (where declaration and performance are the same thing), **never on `auto`**.
+  Written up in `_lead/research/routing-redesign.md` §I, including the two pieces of evidence that must exist
+  before the per-model half ships: that DSH emits our effort ids unchanged, and that no `defaultEffort` is set
+  where it cannot be honoured.
+- **Shipping the documentation without the feature is the point.** A user reading that `auto` ignores
+  `reasoningEffort` loses nothing they had; a user told it works and finding it does not has been misled. This
+  is the same choice 0.7.4 made when it stopped sending an unverified control.
+
 ## [0.7.9] - 2026-10-15
 
 **A gate for the defect class that shipped three times: a model id we declare that the provider does not serve.**
