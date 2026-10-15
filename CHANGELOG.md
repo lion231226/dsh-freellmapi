@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.3] - 2026-10-15
+
+**A failure message said `[object Object]`. It said it during a compaction loop — the moment a reader most needs
+the reason.**
+
+### Fixed
+
+- **`error.message` is no longer assumed to be a string.** A `compaction/end` record in the 2026-10-15 session
+  log reads, in full: `"error": "dsh-freellmapi: [object Object]"` — from turn 116 of the session that compacted
+  fifteen times. `error.message` is a string only **by convention**; an error crossing a library or wire
+  boundary can carry anything, and `String(object)` then yields the literal. Both failure-describing paths
+  assumed otherwise:
+
+  - `failureOf()` took the `instanceof Error` branch without checking the type of `message`.
+  - `describeTransportFailure()` did the same — found while fixing the first one, and it also chained
+    `error.cause.message` unchecked.
+
+  Both now go through one `describeUnknown(value, fallback)` in `lib/errors.js`, which prefers a plausible
+  string field (`message`, `reason`, `code`, `type`, `detail`), falls back to a JSON dump for an opaque
+  object, survives a circular value that cannot be serialised, and never returns an empty string.
+
+### Added
+
+- **`tests/failure-message.test.mjs`** — six assertions over both boundaries: the helper's own contract
+  (including an unserialisable value and a non-string `error.message`), a 400 whose body nests an object where
+  a string belongs, an unreachable provider, and an aborted request.
+
+  The helper is tested **directly** as well as end-to-end, and that is deliberate: an earlier version of this
+  file passed with the defect reinstated, because a nested `error.message` object is *lifted* to a string by
+  `upstreamMessage()` before the broken branch is ever reached. A guard that cannot fail is not a guard — the
+  reverse injection below is what exposed it.
+
+### Notes on scope
+
+- **Reverse injection (on a copy, never in the working tree)**: 3/3 injected defects reddened the guard, with
+  the copy's sha256 compared before and after each — including reinstating the original expression and
+  short-circuiting the helper to `String(value)`. An injection that did **not** go red on the first attempt is
+  why the direct tests exist; the harness now reports a partial result honestly instead of rounding up.
+- **`describeUnknown` lives in `lib/errors.js`**, not at either call site, so the two paths cannot drift into
+  disagreeing about what a usable message is.
+
 ## [0.7.2] - 2026-10-15
 
 **A context-summarisation call is not an ordinary request, and routing it like one made compaction fail
