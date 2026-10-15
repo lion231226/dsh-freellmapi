@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.15] - 2026-10-15
+
+**The lessons become portable, and half of §2's self-optimisation loop becomes executable.**
+
+### Added
+
+- **A project skill** at `<workspace>/.dsh/skills/dsh-freellmapi/SKILL.md` — the carryable part of this
+  project's method, as opposed to the project's own archive. It distils the five judgements that cost the most
+  to learn, each with its real counter-example: **a guard must be provably able to fail** (with the
+  `RED`/`INERT`/`NO-OP` grading and the `1/3` that was once misread as partial success); **a claim must be
+  re-checkable or it is not evidence**; **suspect the instrument first** (the zstd frame that reported a false
+  zero-hit scan, the fake-IP DNS that made "non-public address" always true, the truncated listing that
+  "proved" a file absent); **a comparison must exclude per-request fields** (a body comparison that could never
+  fail); **a transient failure is not a missing capability** (a 429 once read as "rejects tools", and a
+  `max_tokens` limit once read as "cannot see images").
+
+  Verified by **loading it**, not by inspecting it: the skill registry resolved the file and returned its
+  contents with that base directory.
+
+- **Rule 9 in `PROJECT-RULES.md`**: every red light must now be followed by "does the skill need changing?".
+  It states the division plainly — the ledger is **this project's archive**, the skill is the **carryable
+  judgement** — and gives four decision criteria: portable ⇒ into the skill; project-specific fact ⇒ ledger
+  only; already covered ⇒ strengthen the counter-example rather than duplicate; contradicted ⇒ amend the skill
+  and leave the refuted wording in the ledger. Two hard requirements: **every judgement needs at least one real
+  counter-example** (a judgement without one is an aphorism and cannot help anyone decide), and every judgement
+  must trace back to an `L` number (**one that cannot is probably invented, which is worse than absent**).
+
+- **`tools/pipeline.mjs`** — the first executable half of §2's self-optimisation loop, explicitly **advice
+  only**: it reads and reports, never writes `lib/providers.js`, never touches a profile, never enables a
+  provider. It scans **credential-free** catalogues and answers the question the gate does not: *what does
+  upstream serve that we have not declared?* (G10 asks the opposite, which is why both exist.) It evaluates only
+  the **price half** of the free criterion, using the strong `isZeroPrice` form, and refuses to infer any
+  capability — `contextWindow`/`toolCalling`/`vision`/`reasoning` still require the probe kits and a recorded
+  method.
+
+### Notes on scope
+
+- **The telemetry half of §2 is still not implemented, and the tool says so in its own output** rather than
+  printing a section that looks like data. `logRouting`, `getRecentRoutes()` and the `lib/health.js` EWMA live
+  in the running process; a script cannot reach them. Landing that stage needs the plugin to persist a
+  telemetry summary itself.
+- **The pipeline's first live run justified it.** `kilo` serves **393** models against the **4** we declare,
+  with **11** list-price-zero ids we do not carry — including three that were just adopted on the
+  **OpenRouter** route. The same model id is reachable through both gateways; adding it to one is not adding it
+  to the other, and no amount of staring at the pool would have surfaced that.
+- **One assumption was caught by reading rather than guessing**: the tool imported `isZeroPriced`, which does
+  not exist. The real exports are `isFreePriced` (weak: `prompt`/`completion` only) and `isZeroPrice` (strong:
+  every price field, `discount` ignored). The strong form is the correct one — a row that charges for images or
+  web search is not free however cheap its tokens are.
+
 ## [0.7.14] - 2026-10-15
 
 **The `toolCalling` contradiction is closed — both routes agree, on evidence.**
