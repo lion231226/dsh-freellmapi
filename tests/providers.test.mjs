@@ -89,15 +89,18 @@ test('the lead live-probe corrections are applied to the pool', () => {
 
 test('no model claims vision without probe or code evidence', () => {
   // A wrong `vision: true` sends images to a text-only model, which the user
-  // cannot work around — so the flag is only set where T7 had code-level or
+  // cannot work around — so the flag is only set where there is code-level or
   // live-probe evidence, and never on the removed llm7 entry.
   //
-  // The `openrouter` vision row is gone as of the free-model audit
-  // (2026-10-15): `nvidia/nemotron-nano-12b-v2-vl:free` has no serving endpoint
-  // and the zero-guess replacement had no evidenced capability/speed rating, so
-  // the slot was dropped rather than filled with an invented number. Vision
-  // coverage in the default-on pool therefore rests on cerebras — already true
-  // before this change, and asserted below.
+  // History worth keeping: the `openrouter` vision row was dropped in the
+  // free-model audit (2026-10-15) because `nvidia/nemotron-nano-12b-v2-vl:free`
+  // had no serving endpoint and the zero-guess replacement had no evidenced
+  // capability/speed rating. That slot stayed empty until 2026-10-15, when the
+  // pool expansion added two rows whose vision is **probe-measured**, not inferred
+  // from `architecture.input_modalities`: a solid-red and a solid-blue PNG asked
+  // the same question, and each model answered its own image's colour
+  // (`_lead/probe-vision-live.mjs`). Metadata would not have been enough — the
+  // claim is about the model, the measurement is about the endpoint we route to.
   const vision = []
   for (const provider of BUILTIN_PROVIDERS) {
     for (const entry of provider.models) {
@@ -108,6 +111,8 @@ test('no model claims vision without probe or code evidence', () => {
     'cerebras/llama-4-maverick-17b-128e-instruct',
     'github/openai/gpt-4.1',
     'github/openai/gpt-5',
+    'openrouter/dots-studio/dots-3-note-preview:free',
+    'openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
     'zhipu/glm-4.6v-flash',
   ])
   // The default-on pool still has at least one vision option.

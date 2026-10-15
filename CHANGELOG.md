@@ -9,6 +9,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.13] - 2026-10-15
+
+**OpenRouter's pool tripled from 4 to 7 models, and the provider got its vision back — all of it measured,
+none of it inferred.**
+
+### Added
+
+Three rows, each carrying a probe-measured `toolCalling` and two of them a probe-measured `vision`:
+
+| model | context | vision | tools |
+|---|---|---|---|
+| `nvidia/nemotron-3.5-lightning:free` | 1,000,000 | — | measured |
+| `dots-studio/dots-3-note-preview:free` | 512,000 | **measured** | measured |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | 256,000 | **measured** | measured |
+
+Found by scanning all **17 zero-priced** entries in OpenRouter's catalogue with a real credential, not by
+picking ids that looked promising.
+
+### Fixed
+
+- **`cohere/north-mini-code:free` declared `toolCalling: false` on the OpenRouter route.** A one-tool probe
+  returned a structured `tool_calls` entry with valid JSON and the required argument. The row now says `true`.
+  This **resolves a contradiction the previous author recorded honestly** rather than silently aligned: the
+  `kilo` row for the same id says `false`, and it still does — **a different endpoint is a different service**,
+  and the model reached through another gateway is not the same offering. Two facts about two routes, not one
+  inconsistency.
+
+- **The provider's "no vision model" constraint is lifted.** It had been accepted as a deliberate cost after the
+  free-model audit. Two rows now carry vision with the evidence the guard demands.
+
+### Verification
+
+- **`vision` is probe-measured, not inferred from metadata.** `architecture.input_modalities` containing
+  `"image"` is a claim *about the model*; whether an image survives the *endpoint we route to* is a different
+  fact. A new probe (`_lead/probe-vision-live.mjs`) asks the same question about a solid-red and a solid-blue
+  32×32 PNG; both rows answered each image's own colour, which no non-seeing model can do consistently.
+- **Id-level check agrees**: gate G10 reports `openrouter: all 7 id(s) served (of 461 in the catalogue)`.
+- **Free evidence agrees**: G9 shows each new row `zero-priced`, `ok`, age 0d.
+- Suite **460 passed, 0 failed**; gate G1–G10 PASS offline and online.
+
+### Notes on scope
+
+- **`capability` / `speed` on the three new rows are judgements, not measurements**, and their `source` notes
+  say so explicitly (MoE size and the vendor's own wording, rated against the pool's existing scale). Every
+  other field on those rows cites the probe or listing it came from.
+- **`poolside/laguna-s-2.1:free` was left at `toolCalling: false`.** It answered HTTP 429 on two attempts, so it
+  remains **unmeasured** — and an absence of measurement is not a licence to change a declaration.
+- **`openrouter/free` was rejected as a row** despite passing the tool probe: it is a router alias that picks a
+  random free model, so adopting it would mean this plugin handing routing to another router.
+- **Two probe defects were found by this work and fixed.** Both had produced confident wrong answers:
+  1. The vision probe used `max_tokens: 32`, so a reasoning model spent the budget thinking and returned
+     `content: null` — and the probe reported **"NOT VISION"**, blaming the model for a limit the probe imposed.
+  2. The same probe treated two `null` answers as equal, turning an absence of measurement into a verdict.
+  With both fixed, the row that had been misjudged reported `VISION CONFIRMED`.
+
 ## [0.7.12] - 2026-10-15
 
 **Thinking effort is now declared where it can actually be kept — and nowhere else.**

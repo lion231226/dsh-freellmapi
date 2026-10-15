@@ -21,11 +21,12 @@
     },
     "openrouterEndpoints": {
       "file": "openrouter-endpoints-2026-10-15.json",
-      "sha256": "8e457e83dfd0ebeaea8b4c3f77039bb5deee714cbbf64c9ecdf666886dbfcbd5",
-      "bytes": 7368,
+      "sha256": "3374ea258cfd08137617fddc57ba0ad281bfe1da9437f2cc5524280350e2fe58",
+      "bytes": 12894,
       "method": "anonymous GET https://openrouter.ai/api/v1/models/<id>/endpoints",
       "takenAt": "2026-10-15T11:38:42.486Z",
-      "criterion": "endpoints >= 1 && every price field on every endpoint === \"0\""
+      "criterion": "endpoints >= 1 && every price field on every endpoint === \"0\"",
+      "ids": 7
     }
   }
 }
