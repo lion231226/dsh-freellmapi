@@ -300,6 +300,51 @@ if (ONLINE) {
 }
 
 // ---------------------------------------------------------------------------
+// G9 — free-model evidence drift (informational, anonymous)
+// ---------------------------------------------------------------------------
+
+if (ONLINE) {
+  const drift = await (async () => {
+    const { BUILTIN_PROVIDERS } = await import(moduleUrl('lib/providers.js'))
+    const { FREE_VERIFIED_STALE_DAYS, freeVerificationState, isFreePriced, verifiedAgeDays } = await import(moduleUrl('lib/free.js'))
+    // Anonymous on purpose: OpenRouter's catalogue is readable with no credential,
+    // which is exactly why this check is affordable to run every time. Sending a
+    // key would make the measurement depend on the account, and the pool's claim is
+    // about the public catalogue.
+    const response = await fetch('https://openrouter.ai/api/v1/models', {
+      headers: { accept: 'application/json', 'user-agent': 'dsh-freellmapi-gate/1.0' },
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!response.ok) throw new Error(`openrouter /models: HTTP ${response.status}`)
+    const payload = await response.json()
+    const free = new Set((payload.data ?? []).filter((entry) => isFreePriced(entry?.pricing)).map((entry) => entry.id))
+    const rows = []
+    for (const provider of BUILTIN_PROVIDERS) {
+      if (provider.id !== 'openrouter') continue
+      for (const entry of provider.models) {
+        rows.push({
+          id: entry.id,
+          upstream: free.has(entry.id) ? 'zero-priced' : 'absent-or-paid',
+          age: verifiedAgeDays(entry.verified),
+          evidence: freeVerificationState(entry.verified),
+          freeVerdict: free.has(entry.id) ? 'ok' : 'DRIFT (re-measure before shipping)',
+        })
+      }
+    }
+    return { entries: (payload.data ?? []).length, freeCount: free.size, staleDays: FREE_VERIFIED_STALE_DAYS, rows }
+  })()
+  const drifted = drift.rows.filter((row) => row.freeVerdict !== 'ok')
+  const stale = drift.rows.filter((row) => row.evidence === 'stale' || row.evidence === 'expired')
+  // Informational, for the same reason G7 and G8 are: a provider changing its free
+  // set is an upstream event, not a defect in this plugin — but it must be
+  // *visible* before someone ships a dead row. The blocking half lives offline in
+  // `tests/free-model-guard.test.mjs`, against the committed fixture bytes.
+  record('G9', 'free-model evidence drift (informational, anonymous price check)', true,
+    `${drift.rows.length} free rows vs ${drift.freeCount} zero-priced upstream entries of ${drift.entries}: ${drifted.length} drifted, ${stale.length} stale (>${drift.staleDays}d)`)
+  results[results.length - 1].rows = drift.rows
+}
+
+// ---------------------------------------------------------------------------
 // verdict
 // ---------------------------------------------------------------------------
 
@@ -312,6 +357,11 @@ if (JSON_OUT) {
   for (const r of results) {
     console.log(`  ${r.ok ? '✔' : '✘'} ${r.id.padEnd(3)} ${r.title.padEnd(width)}  ${r.detail}`)
     if (Array.isArray(r.rows)) for (const row of r.rows) {
+      // G9 rows carry the free-model drift shape, not a reachability probe shape.
+      if (row.freeVerdict !== undefined) {
+        console.log(`        ${String(row.id).padEnd(50)} ${String(row.upstream).padEnd(15)} age=${String(row.age).padStart(4)}d  ${String(row.evidence).padEnd(8)} ${row.freeVerdict}`)
+        continue
+      }
       console.log(`        ${row.provider.padEnd(13)} ${String(row.status ?? '—').padEnd(5)} ${row.method.padEnd(10)} ${verdictOf(row)}${row.enabled ? '' : '  (disabled by default)'}`)
     }
   }

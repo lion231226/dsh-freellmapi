@@ -1,0 +1,31 @@
+{
+  "note": "One entry per committed fixture. The guard recomputes these hashes from the files on disk and refuses to judge anything if they moved: evidence that cannot be re-checked is not evidence.",
+  "fixtures": {
+    "openrouter": {
+      "file": "openrouter-models-2026-10-15.json",
+      "sha256": "fe83d51d8696c1b21cea8b522876a439bb1e35ca4f412485e19f1bf7353184bb",
+      "bytes": 774095,
+      "method": "anonymous GET https://openrouter.ai/api/v1/models",
+      "takenAt": "2026-10-15T19:25:01+08:00",
+      "criterion": "pricing.prompt === \"0\" && pricing.completion === \"0\" (no id suffix is read)",
+      "entries": 462
+    },
+    "kilo": {
+      "file": "kilo-models-2026-10-15.json",
+      "sha256": "57257ffe3a1f6737c96f049946c3764d7ce9245d90cd865fbc77c43b3c1d90ce",
+      "bytes": 490164,
+      "method": "anonymous GET https://api.kilo.ai/api/gateway/models",
+      "takenAt": "2026-10-15T19:27:52+08:00",
+      "criterion": "isFree === true && pricing.prompt === \"0\" && pricing.completion === \"0\"",
+      "entries": 394
+    },
+    "openrouterEndpoints": {
+      "file": "openrouter-endpoints-2026-10-15.json",
+      "sha256": "8e457e83dfd0ebeaea8b4c3f77039bb5deee714cbbf64c9ecdf666886dbfcbd5",
+      "bytes": 7368,
+      "method": "anonymous GET https://openrouter.ai/api/v1/models/<id>/endpoints",
+      "takenAt": "2026-10-15T11:38:42.486Z",
+      "criterion": "endpoints >= 1 && every price field on every endpoint === \"0\""
+    }
+  }
+}

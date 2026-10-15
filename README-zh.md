@@ -48,7 +48,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.7.0   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.7.1   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -201,10 +201,37 @@ key 是性价比最高的一步：默认候选池是 `groq`、`cerebras`、`open
   无法区分"拒匿名"与"拒区域"；一把真 key 或换一个出口 IP 才能定论。**本 README 没有任何结论依赖那条
   匿名路径是通的。**
 
-**探测从哪个出口发出，本身就是结论的一部分。** 这些测量发自**本机直连、未配置任何代理**（六个代理环境
-变量全为空），而出口在**美国洛杉矶**，不在中国大陆。所以这里没有任何一句话声称**国内直连**会得到同样
-结果——对 `modelscope` / `xfyun` / `siliconflow` 尤其如此。应用层的判定（`401`、RFC 6750 凭据挑战、
-origin 的错误 JSON）与出口无关；"**从你的网络能不能到**"有关。
+**每条探测走的是哪条出口，本身就是结论的一部分。** 探测主机跑的是**智能分流（split-tunnel）VPN**：
+发往中国大陆站点的流量**直连**出网，其余流量走代理，代理出口在**美国洛杉矶**。**洛杉矶这个出口是"国外
+那条路径"的位置——它不是本机的位置，本 README 也不作此声称。** 因此上面的结果按路径分开陈述，而不是
+留给读者去推：
+
+- **直连（中国大陆境内）：** `modelscope`、`xfyun`、`siliconflow`——0.7.0 新增六家里位于中国大陆的三台
+  主机。三家都是**经由直连路径**应答的（`xfyun` 与 `siliconflow` 对假凭据探测返回 `401`；`modelscope`
+  同样可达，另见下方文档站点说明）。
+- **经代理（国外出口，US-LA）：** 其余三家新增，以及 0.7 之前的全部 12 家。`routeway` 的 Cloudflare
+  行为是在**这条**路径上测的——这正是它的 `403` 至今仍无法与"拒区域"区分开的原因，见上文的
+  `AMBIGUOUS` 说明。
+- **应用层的判定**（`401`、RFC 6750 凭据挑战、origin 的错误 JSON）与走哪条出口完全无关；"**从你的网络
+  能不能到**"则有关——所以每条都记录了所用路径。
+
+**工具的限制不是被测对象的属性。** 本节早先的草稿从一次 `web_fetch` 抓中文厂商文档站失败——报
+*"hostname resolves to a non-public IP address"*——推出"**本机无法访问中文厂商/文档站点**"。**这个推论
+是错的。** 那句话是本项目自己的 **DNS 守卫**在说话：智能分流 VPN 用保留的基准测试网段
+`198.18.0.0/15` 里的**fake-IP** 地址应答 DNS，而 `web_fetch` 拒绝抓取任何解析到该网段的主机名。它在
+**同一会话里用同一句话同时拒绝了 `www.xfyun.cn` 和 `github.com`**——这正是它属于"守卫"而非"测量"的
+破绽。改用普通 HTTP 客户端经直连路径重测（2026-10-15）：
+
+| 主机 | 直连路径下的结果 |
+|---|---|
+| `www.xfyun.cn`（厂商文档页） | **HTTP `200`，128 382 B，618 ms**，`Server: Tengine` |
+| `modelscope.cn` | **HTTP `200`，4 639 B，290 ms** |
+| `spark-api-open.xf-yun.com`（`POST /v1/chat/completions`） | **HTTP `401`**，`{"message":"HMAC signature cannot be verified: apikey not found"}` |
+| `siliconflow` 的 `api.siliconflow.com`（`GET /v1/models`） | **HTTP `401`**，`{"code":30014,…"message":"Token is invalid."}` |
+
+所以中文文档站点**一直是可达的**，读不到它们的只有 `web_fetch`。任何"某国的站点到不了"的结论都必须
+基于**可达性测量（一个真正与主机通话的 HTTP 客户端）**，而绝不能基于**抓取工具报的错**——后者报告的
+是工具的策略，前者才报告网络。
 
 而当某家在你的网络里**确实**不可达时，关掉它就是全部改动，写进
 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`（或插件自己的 `providers` 字段）：
@@ -221,8 +248,9 @@ origin 的错误 JSON）与出口无关；"**从你的网络能不能到**"有�
 `mistral` <https://console.mistral.ai/api-keys>、`zhipu` <https://open.bigmodel.cn/usercenter/apikeys>、
 `volcengine` <https://console.volcengine.com/ark>、`longcat` <https://longcat.chat/platform/api_keys>。
 **下面 0.7.0 新增六家的申请页取自池条目自己的 `keyURL` 字段，均未经独立复核**——只有 `modelscope`
-那一个有上游引用；维护者另于 2026-10-15 实测：在用于本次探测的这台机器上，`www.xfyun.cn` 及同类中文
-厂商/文档站点一律解析到非公网地址。
+那一个有上游引用。（此前本节把这项缺口归因于"中文厂商/文档站点在本机一律解析到非公网地址"。**该说法
+撤回**：那是 `web_fetch` 的 DNS 守卫造成的假象，厂商文档页实际经直连路径抓到了——见上方的可达性对照表。
+申请页本身仍未复核；错的只是原先给的那个理由。）
 
 | Provider | `apiKeyEnv` | 申请入口 | 免费额度（上游基线） | 默认 | 备注 |
 |---|---|---|---|---|---|
@@ -239,7 +267,7 @@ origin 的错误 JSON）与出口无关；"**从你的网络能不能到**"有�
 | `nvidia` | `NVIDIA_API_KEY` | — | 40 RPM | ⬜ 关 | 能力上限高（`qwen/qwen3-coder-480b-a35b-instruct`），但试用 ToS 写着 "evaluation only"、首字节可能几分钟，另见[限制](#限制与未验证项)里的一条已知缺口 |
 | `ovh` | `OVH_AI_ENDPOINTS_KEY` | — | 2 RPM | ⬜ 关 | **免凭据可用**，但只有 2 RPM |
 | `modelscope` | `MODELSCOPE_API_KEY` | <https://modelscope.cn/my/myaccesstoken> | 上游写过 2000 请求/日，但上游自己已把该数字标为 historical（现按魔粒计费） | ⬜ 关 | 阿里魔搭。**token 只有在账号绑定到阿里云中国站 + 中国实名认证账号之后才能服务流量**——未绑定 token 每次调用都回 `401 please bind your alibaba cloud account before use`。它的 `GET /models` 对**任意**凭据都回 `200`，所以那个端点不能用来校验 key；要用 1-token chat |
-| `xfyun` | `XFYUN_API_KEY` | <https://console.xfyun.cn/> | 无公开的 token/QPS 上限——上游按"不猜"原则置 `null` | ⬜ 关 · ⚠️ **推测** | 讯飞星火。**需中国实名认证。** 鉴权用控制台的 *APIPassword* 当 Bearer token。模型 id `lite` 是**规格占位、未经核实**：上游只说过"免费的是 Lite 档"，而它的目录需要真 key 才能取 |
+| `xfyun` | `XFYUN_API_KEY` | <https://console.xfyun.cn/> | 无公开的 token/QPS 上限——上游按"不猜"原则置 `null` | ⬜ 关 · ⚠️ **推测** | 讯飞星火。**需中国实名认证。** 鉴权用控制台的 *APIPassword* 当 Bearer token。模型 id `lite` 现已**由厂商文档证实，不再是占位**：官方 HTTP 接口文档页（`spark-api-open.xf-yun.com/v1`，2026-10-15 经**直连**路径取得）把 `4.0Ultra` / `generalv3.5` / `max-32k` / `generalv3` / `pro-128k` / `lite` 列为 `model` 的可取枚举，且其版本表把 **Lite** 写为轻量级并注明**支持免费使用**。但**本机从未用有效凭据实际跑通**，故 `confidence` 仍为 `speculative` |
 | `siliconflow` | `SILICONFLOW_API_KEY` | <https://cloud.siliconflow.com/account/ak> | **没有可循环的免费 chat 额度**——`.com` 端点是一次性 $1 试用额度 | ⬜ 关 · ⚠️ **推测** | 硅基流动。**需中国实名认证。** 上游保留这家是为了它的**免费生成式媒体**模型（图像/TTS），而本插件的 LLM seam 消费不了；它当初登记的 chat 模型是**付费**的（$0.06/M），上游已把那一行删掉 |
 | `sambanova` | `SAMBANOVA_API_KEY` | <https://cloud.sambanova.ai/apis> | **没有——免费额度已被永久取消。** 持有效 key 时 chat 回 `402 payment method required` | ⬜ 关 · ⚠️ **推测** | **收进来是留档，不是当免费额度用。** 上游正是以这个理由在 V23 里把它退役。它的 `baseURL` **不是**上游转录（上游零匹配），来自厂商公开文档；而且它的 `/models` 仍然回 `200`——上游自己把那个 200 记为 billing gate 假阳性 |
 | `huggingface` | `HUGGINGFACE_API_KEY` | <https://huggingface.co/settings/tokens> | 可循环的 **$0.10/月** router 额度，无需绑卡（上游口径：70B 模型上约 1–3M token/月） | ⬜ 关 | Inference Providers router。它的"免费"是**账户额度，不是目录标记**：实测其目录里 296 条 provider 行中 **0 条**标 `is_free: true`。同一个 id 的 `contextWindow` 逐后端不同 |
@@ -257,8 +285,9 @@ origin 的错误 JSON）与出口无关；"**从你的网络能不能到**"有�
 >   不要把这两家的 `enabled: true` 读成"免费容量有保证"。
 > - **`xfyun` 与 `siliconflow` 需要中国实名认证**，其 key 才能服务流量；`modelscope` 还额外要求绑定阿里云
 >   中国站账号。这是对"零配置"定位的真实门槛，也正是这几行被标注而不是被默认开启的原因。
-> - ⚠️ **推测**表示该条目的池内 `confidence` 为 `speculative`：转录是尽力而为，**可能是错的**——首当其冲
->   的就是 `xfyun` 的模型 id。启用它们等于你接受这个风险。
+> - ⚠️ **推测**表示该条目的池内 `confidence` 为 `speculative`：转录是尽力而为，**可能是错的**。`xfyun`
+>   的模型 id 已不再是那个例子——它现在有厂商文档背书（见上方它的行）；对它而言仍未证实的，是"从未有
+>   有效凭据用过它"。启用它们等于你接受这个风险。
 > - 在这六家保持默认关闭期间，**设置卡片的密钥行不会为它们长出任何一行**。这是预期行为：浏览器那份表是
 >   构建时按 `enabled === true` 的条目生成的（见[添加 key](#添加-key)与 0.6.1 的变更记录）。要启用就自己
 >   设好它的 `apiKeyEnv`，或在插件自己的设置页里粘贴 key。
@@ -882,7 +911,7 @@ providers:
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.7.0` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.1` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立

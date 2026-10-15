@@ -51,7 +51,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.7.0   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.7.1   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -217,11 +217,41 @@ Measured this way on 2026-10-15:
   *anonymous rejected* from *region rejected*; a real key, or a second egress IP, would settle it. Nothing
   in this README depends on that path being open.
 
-**Where these probes ran from is part of the result.** They were made from a **direct connection with no
-proxy configured** (all six proxy environment variables empty) whose egress is **US-Los Angeles**, not
-mainland China. So none of this claims that a **domestic direct connection** behaves the same — least of all
-for `modelscope` / `xfyun` / `siliconflow`. The application-layer verdicts (`401`, RFC 6750 credential
-challenges, origin error JSON) do not depend on the egress; *"reachable from your network"* does.
+**Which egress each probe used is part of the result.** The probe host runs a **VPN in split-tunnel mode**:
+traffic to mainland-Chinese destinations goes out **direct**, everything else goes through the proxy, whose
+exit is **US-Los Angeles**. **The LA exit is the overseas path's location — it is not the host's location,
+and this README does not claim otherwise.** So the results above split by path, and the split is stated
+rather than left to inference:
+
+- **Direct (within mainland China):** `modelscope`, `xfyun` and `siliconflow` — the three mainland-Chinese
+  hosts in the 0.7.0 additions. Each answered its probe **over the direct path** (`xfyun` and `siliconflow`
+  returned `401` to the bogus-credential probe; `modelscope` was also reached, see the doc-site note below).
+- **Through the proxy (overseas exit, US-LA):** the other three additions and all 12 pre-0.7 providers.
+  `routeway`'s Cloudflare behaviour is measured on **this** path, which is why its `403` still cannot be
+  separated from a region rejection — see the `AMBIGUOUS` note above.
+- **The application-layer verdicts** (`401`, RFC 6750 credential challenges, origin error JSON) do not depend
+  on the egress at all; *"reachable from your network"* does, which is why the path is recorded per provider.
+
+**A tool limit is not a property of the site.** An earlier draft of this section reasoned from a failed
+`web_fetch` of a Chinese vendor documentation site — *"hostname resolves to a non-public IP address"* — to
+*"Chinese vendor and documentation sites are unreachable from this machine."* **That inference was wrong.**
+The message is this project's own **DNS guard**: a split-tunnel VPN answers DNS with **fake-IP** addresses
+from the reserved benchmarking range `198.18.0.0/15`, and `web_fetch` refuses to fetch any hostname that
+resolves there. It rejected `www.xfyun.cn` **and `github.com` in the same session with the same sentence**,
+which is what exposes it as a guard rather than a measurement. Re-measured (2026-10-15) over the direct path
+with an ordinary HTTP client:
+
+| Host | Result over the direct path |
+|---|---|
+| `www.xfyun.cn` (vendor doc page) | **HTTP `200`, 128 382 B, 618 ms**, `Server: Tengine` |
+| `modelscope.cn` | **HTTP `200`, 4 639 B, 290 ms** |
+| `spark-api-open.xf-yun.com` (`POST /v1/chat/completions`) | **HTTP `401`**, `{"message":"HMAC signature cannot be verified: apikey not found"}` |
+| `siliconflow`'s `api.siliconflow.com` (`GET /v1/models`) | **HTTP `401`**, `{"code":30014,…"message":"Token is invalid."}` |
+
+So the Chinese documentation sites were **always reachable from this machine**; only `web_fetch` could not
+read them. Any verdict about *"sites in country X cannot be reached"* needs a **reachability measurement
+(an HTTP client speaking to the host)**, never a **fetch-tool error**, because the latter reports the tool's
+policy and the former reports the network.
 
 And when a provider genuinely is unreachable from your network, turning it off is the whole change, in
 `$DSH_HOME/profiles/<profile>/cordis.patch.yml` (or the plugin's own `providers` field):
@@ -239,9 +269,11 @@ Key request pages (the first seven were verified reachable on 2026-10-14):
 `zhipu` <https://open.bigmodel.cn/usercenter/apikeys>, `volcengine` <https://console.volcengine.com/ark>,
 `longcat` <https://longcat.chat/platform/api_keys>.
 **The six 0.7.0 additions' key pages below are the pool's own `keyURL` values and were *not* independently
-verified** — only `modelscope`'s carries an upstream citation, and the maintainer measured (2026-10-15) that
-`www.xfyun.cn` and comparable Chinese vendor/documentation sites resolve to non-public addresses from the
-machine used for the probes.
+verified** — only `modelscope`'s carries an upstream citation. (An earlier draft justified that gap with the
+claim that Chinese vendor/documentation sites "resolve to non-public addresses" from this machine. **That
+claim is withdrawn**: it was a `web_fetch` DNS-guard artefact, and the vendor doc page was in fact fetched
+over the direct path — see the reachability table above. The key pages themselves remain unverified; only
+the reason previously given for that was wrong.)
 
 | Provider | `apiKeyEnv` | Key page | Free tier (upstream baseline) | Default | Notes |
 |---|---|---|---|---|---|
@@ -258,7 +290,7 @@ machine used for the probes.
 | `nvidia` | `NVIDIA_API_KEY` | — | 40 RPM | ⬜ off | High capability ceiling (`qwen/qwen3-coder-480b-a35b-instruct`), but "evaluation only" trial ToS, first token can take minutes, and see the known gap in [Limitations](#limitations-and-unverified-claims) |
 | `ovh` | `OVH_AI_ENDPOINTS_KEY` | — | 2 RPM | ⬜ off | **Keyless works**, but 2 RPM only |
 | `modelscope` | `MODELSCOPE_API_KEY` | <https://modelscope.cn/my/myaccesstoken> | Upstream wrote 2 000 req/day, then marked that figure historical (billing moved to magic grains 魔粒) | ⬜ off | Alibaba's ModelScope (魔搭). **A token only serves traffic once the account is bound to an Alibaba Cloud China-site account with Chinese real-name verification** — unbound tokens answer `401 please bind your alibaba cloud account before use` on every call. Its `GET /models` answers `200` for *any* credential, so it cannot validate a key; use a 1-token chat instead |
-| `xfyun` | `XFYUN_API_KEY` | <https://console.xfyun.cn/> | No published token/QPS ceiling — upstream sets `null` rather than guessing | ⬜ off · ⚠️ **speculative** | iFlytek Spark (讯飞星火). **Chinese real-name verification required.** Auth is the console *APIPassword* as a bearer token. The model id `lite` is a **specification placeholder, not verified**: upstream says only "the Lite model is the free one" and its catalog needs a real key |
+| `xfyun` | `XFYUN_API_KEY` | <https://console.xfyun.cn/> | No published token/QPS ceiling — upstream sets `null` rather than guessing | ⬜ off · ⚠️ **speculative** | iFlytek Spark (讯飞星火). **Chinese real-name verification required.** Auth is the console *APIPassword* as a bearer token. Its model id `lite` is now **vendor-documented, not a placeholder**: the official HTTP API page (`spark-api-open.xf-yun.com/v1`, fetched 2026-10-15 over the direct path) lists `4.0Ultra` / `generalv3.5` / `max-32k` / `generalv3` / `pro-128k` / `lite` as the accepted `model` values, and its version table describes **Lite** as 轻量级 and **支持免费使用** (*supports free use*). Still **not exercised with a valid credential here**; `confidence` stays `speculative` |
 | `siliconflow` | `SILICONFLOW_API_KEY` | <https://cloud.siliconflow.com/account/ak> | **No recurring free chat tier** — the `.com` endpoint is a one-time $1 trial credit | ⬜ off · ⚠️ **speculative** | SiliconFlow (硅基流动). **Chinese real-name verification required.** Upstream keeps the platform for its **free generative-media** models (image/TTS), which this plugin's LLM seam cannot consume; the chat model it once listed is **paid** ($0.06/M) and upstream deleted that row |
 | `sambanova` | `SAMBANOVA_API_KEY` | <https://cloud.sambanova.ai/apis> | **None — the free tier was permanently retired.** With a valid key, chat answers `402 payment method required` | ⬜ off · ⚠️ **speculative** | **Listed for the record, not as a free tier.** Upstream dropped it in V23 for exactly that reason. Its `baseURL` is **not** transcribed from upstream (zero matches there) but taken from vendor documentation, and its `/models` still answers `200` — which upstream itself records as a billing-gate false positive |
 | `huggingface` | `HUGGINGFACE_API_KEY` | <https://huggingface.co/settings/tokens> | Recurring **$0.10/mo** router credit, no card required (upstream: ~1–3M tokens/month on a 70B) | ⬜ off | The Inference Providers router. Free-ness there is an **account credit, not a catalog flag**: of the 296 provider rows in its catalog, **0** report `is_free: true`. `contextWindow` differs per backend for the same id |
@@ -281,7 +313,9 @@ machine used for the probes.
 >   `modelscope` additionally needs the Alibaba-Cloud-China-site binding. That is a real barrier to the
 >   "zero config" story, and it is why these rows are labelled rather than enabled.
 > - ⚠️ **speculative** marks the entries whose pool `confidence` is `speculative`: the transcription is
->   best-effort and can be wrong — `xfyun`'s model id above all. Enabling one is you accepting that.
+>   best-effort and can be wrong. `xfyun`'s model id is no longer the example — it is vendor-documented now
+>   (see its row above); what remains unverified for it is that no valid credential has ever used it.
+>   Enabling one is you accepting that.
 > - **The key rows in the settings card will not grow for any of these six** while they stay disabled. That
 >   is expected: the browser table is generated at build time from `enabled === true` entries only (see
 >   [Adding keys](#adding-keys) and the 0.6.1 note in the changelog). Enable one and set its `apiKeyEnv`
@@ -980,7 +1014,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.7.0` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.1` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package

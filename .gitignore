@@ -42,3 +42,19 @@ desktop.ini
 # Build scratch space.
 .tmp/
 tmp/
+
+# Working notes. `_lead/` is where the investigation behind a release is
+# written down: probe scripts, raw responses, reachability measurements,
+# design documents. It is a workbench, not a deliverable, and this package is
+# published — `git add -A` in the release ceremony would otherwise sweep it
+# into the repository silently, which is precisely the failure mode rule 1
+# exists to prevent.
+#
+# The canonical location is the *workspace* `_lead/` (the parent of this
+# repository), not a copy inside it. This rule is the backstop for when a
+# session writes to the wrong one anyway, which has already happened once.
+#
+# NOTE: `_lead/flake-probe.mjs` is tracked on purpose (rule 8 cites it as the
+# diagnostics for the unresolved intermittent test failure) and is unaffected
+# by this rule — gitignore never untracks a file that is already in the index.
+_lead/

@@ -1,0 +1,47 @@
+{
+  "generatedAt": "2026-10-15T11:38:42.486Z",
+  "method": "anonymous GET https://openrouter.ai/api/v1/models/<id>/endpoints",
+  "credentialSent": false,
+  "ids": {
+    "nvidia/nemotron-3-ultra-550b-a55b:free": {
+      "status": 200,
+      "endpointCount": 1,
+      "providers": [
+        "Nvidia"
+      ],
+      "bodySha256": "514195a60feb1a73ec4b513b9b949b4bac5057c50105c7e9907c84a7fc543106",
+      "bytes": 1427,
+      "body": "{\"data\":{\"id\":\"nvidia/nemotron-3-ultra-550b-a55b:free\",\"name\":\"NVIDIA: Nemotron 3 Ultra (free)\",\"created\":1780551208,\"description\":\"NVIDIA Nemotron 3 Ultra is an open frontier-reasoning and orchestration model from NVIDIA, with 55B active parameters out of 550B total (MoE). Built on a hybrid Transformer-Mamba mixture-of-experts architecture, it...\",\"architecture\":{\"tokenizer\":\"Other\",\"instruct_type\":null,\"modality\":\"text->text\",\"input_modalities\":[\"text\"],\"output_modalities\":[\"text\"]},\"endpoints\":[{\"name\":\"Nvidia | nvidia/nemotron-3-ultra-550b-a55b-20260604:free\",\"model_id\":\"nvidia/nemotron-3-ultra-550b-a55b:free\",\"model_name\":\"NVIDIA: Nemotron 3 Ultra\",\"context_length\":1000000,\"pricing\":{\"prompt\":\"0\",\"completion\":\"0\",\"discount\":0},\"provider_name\":\"Nvidia\",\"tag\":\"nvidia\",\"quantization\":\"unknown\",\"max_completion_tokens\":65536,\"max_prompt_tokens\":null,\"supported_parameters\":[\"reasoning\",\"include_reasoning\",\"temperature\",\"max_tokens\",\"seed\",\"top_p\",\"tools\",\"tool_choice\",\"reasoning_effort\"],\"supports_tool_choice\":{\"none\":true,\"auto\":true,\"required\":true,\"function\":true},\"status\":-5,\"uptime_last_30m\":6.666666666666667,\"uptime_last_5m\":0,\"uptime_last_1d\":64.93055555555556,\"supports_implicit_caching\":false,\"native_tools\":{},\"supports_voice_cloning\":false,\"supports_multiple_audio_references\":false,\"supports_image_reference\":false,\"supports_diarization\":false,\"latency_last_30m\":null,\"throughput_last_30m\":null}]}}"
+    },
+    "nvidia/nemotron-3-super-120b-a12b:free": {
+      "status": 200,
+      "endpointCount": 1,
+      "providers": [
+        "Nvidia"
+      ],
+      "bodySha256": "92ed3ca10a3754dbe2125aa4981879d62fe8e0bfafccdf4e737a950da7aa3277",
+      "bytes": 1454,
+      "body": "{\"data\":{\"id\":\"nvidia/nemotron-3-super-120b-a12b:free\",\"name\":\"NVIDIA: Nemotron 3 Super (free)\",\"created\":1773245239,\"description\":\"NVIDIA Nemotron 3 Super is a 120B-parameter open hybrid MoE model, activating just 12B parameters for maximum compute efficiency and accuracy in complex multi-agent applications. Built on a hybrid Mamba-Transformer...\",\"architecture\":{\"tokenizer\":\"Other\",\"instruct_type\":null,\"modality\":\"text->text\",\"input_modalities\":[\"text\"],\"output_modalities\":[\"text\"]},\"endpoints\":[{\"name\":\"Nvidia | nvidia/nemotron-3-super-120b-a12b-20230311:free\",\"model_id\":\"nvidia/nemotron-3-super-120b-a12b:free\",\"model_name\":\"NVIDIA: Nemotron 3 Super\",\"context_length\":262144,\"pricing\":{\"prompt\":\"0\",\"completion\":\"0\",\"discount\":0},\"provider_name\":\"Nvidia\",\"tag\":\"nvidia\",\"quantization\":\"unknown\",\"max_completion_tokens\":235929,\"max_prompt_tokens\":null,\"supported_parameters\":[\"reasoning\",\"include_reasoning\",\"temperature\",\"max_tokens\",\"seed\",\"top_p\",\"tools\",\"tool_choice\",\"structured_outputs\",\"response_format\",\"reasoning_effort\"],\"supports_tool_choice\":{\"none\":false,\"auto\":true,\"required\":true,\"function\":true},\"status\":0,\"uptime_last_30m\":100,\"uptime_last_5m\":100,\"uptime_last_1d\":99.93055555555556,\"supports_implicit_caching\":false,\"native_tools\":{},\"supports_voice_cloning\":false,\"supports_multiple_audio_references\":false,\"supports_image_reference\":false,\"supports_diarization\":false,\"latency_last_30m\":null,\"throughput_last_30m\":null}]}}"
+    },
+    "cohere/north-mini-code:free": {
+      "status": 200,
+      "endpointCount": 1,
+      "providers": [
+        "Cohere"
+      ],
+      "bodySha256": "718dd4e8ce509b954214cd5797660895cd619a90fd504f66e5dc921570f6c6cf",
+      "bytes": 1366,
+      "body": "{\"data\":{\"id\":\"cohere/north-mini-code:free\",\"name\":\"Cohere: North Mini Code (free)\",\"created\":1781723748,\"description\":\"North Mini Code is Cohere's first agentic coding model and the debut of its North family. A sparse mixture-of-experts model with 30B total parameters and 3B active, it is optimized...\",\"architecture\":{\"tokenizer\":\"Cohere\",\"instruct_type\":null,\"modality\":\"text->text\",\"input_modalities\":[\"text\"],\"output_modalities\":[\"text\"]},\"endpoints\":[{\"name\":\"Cohere | cohere/north-mini-code-20260617:free\",\"model_id\":\"cohere/north-mini-code:free\",\"model_name\":\"Cohere: North Mini Code\",\"context_length\":256000,\"pricing\":{\"prompt\":\"0\",\"completion\":\"0\",\"discount\":0},\"provider_name\":\"Cohere\",\"tag\":\"cohere\",\"quantization\":\"unknown\",\"max_completion_tokens\":64000,\"max_prompt_tokens\":null,\"supported_parameters\":[\"reasoning\",\"include_reasoning\",\"max_tokens\",\"temperature\",\"top_p\",\"stop\",\"frequency_penalty\",\"presence_penalty\",\"top_k\",\"seed\",\"tools\",\"tool_choice\"],\"supports_tool_choice\":{\"none\":true,\"auto\":true,\"required\":true,\"function\":true},\"status\":0,\"uptime_last_30m\":100,\"uptime_last_5m\":100,\"uptime_last_1d\":100,\"supports_implicit_caching\":false,\"native_tools\":{},\"supports_voice_cloning\":false,\"supports_multiple_audio_references\":false,\"supports_image_reference\":false,\"supports_diarization\":false,\"latency_last_30m\":null,\"throughput_last_30m\":null}]}}"
+    },
+    "poolside/laguna-s-2.1:free": {
+      "status": 200,
+      "endpointCount": 1,
+      "providers": [
+        "Poolside"
+      ],
+      "bodySha256": "b4688385f63375e622be2206f52ccfb7158f04a3eb2088128da402bb2c5b5356",
+      "bytes": 1332,
+      "body": "{\"data\":{\"id\":\"poolside/laguna-s-2.1:free\",\"name\":\"Poolside: Laguna S 2.1 (free)\",\"created\":1784652683,\"description\":\"Laguna S 2.1 is the latest coding agent model from [Poolside](<https://poolside.ai/>). Laguna S 2.1 is a 118B total parameter model with 8B active parameters, scoring 70.2% on Terminal-Bench 2.1 and...\",\"architecture\":{\"tokenizer\":\"Other\",\"instruct_type\":null,\"modality\":\"text->text\",\"input_modalities\":[\"text\"],\"output_modalities\":[\"text\"]},\"endpoints\":[{\"name\":\"Poolside | poolside/laguna-s-2.1-20260720:free\",\"model_id\":\"poolside/laguna-s-2.1:free\",\"model_name\":\"Poolside: Laguna S 2.1\",\"context_length\":262144,\"pricing\":{\"prompt\":\"0\",\"completion\":\"0\",\"discount\":0},\"provider_name\":\"Poolside\",\"tag\":\"poolside/fp4\",\"quantization\":\"fp4\",\"max_completion_tokens\":32768,\"max_prompt_tokens\":null,\"supported_parameters\":[\"reasoning\",\"include_reasoning\",\"temperature\",\"max_tokens\",\"tools\",\"tool_choice\"],\"supports_tool_choice\":{\"none\":false,\"auto\":true,\"required\":false,\"function\":false},\"status\":0,\"uptime_last_30m\":100,\"uptime_last_5m\":100,\"uptime_last_1d\":99.93055555555556,\"supports_implicit_caching\":false,\"native_tools\":{},\"supports_voice_cloning\":false,\"supports_multiple_audio_references\":false,\"supports_image_reference\":false,\"supports_diarization\":false,\"latency_last_30m\":null,\"throughput_last_30m\":null}]}}"
+    }
+  }
+}

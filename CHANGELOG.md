@@ -9,6 +9,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.1] - 2026-10-15
+
+**Four "free" OpenRouter models were not free — they were not served at all. The word now costs evidence.
+Two claims this project had published about its own measurements were also wrong, and are corrected below.**
+
+### Fixed
+
+- **`openrouter` shipped four `:free` ids that no longer exist upstream, and the model picker called them
+  free.** An anonymous `GET https://openrouter.ai/api/v1/models` on 2026-10-15 (462 entries) contains none of
+  `deepseek/deepseek-v3.1:free`, `moonshotai/kimi-k2.6:free`, `qwen/qwen3-coder:free` or
+  `nvidia/nemotron-nano-12b-v2-vl:free`. The per-model sub-resource agrees and says why: the first answers
+  **`404 Not Found`**, the other three still have a catalogue record with **`endpoints: []`** — a zero price
+  nobody serves. Positive controls in the same run (`nvidia/nemotron-3-super-120b-a12b:free` and
+  `poolside/laguna-s-2.1:free` → `endpoints: 1`) rule out a method artefact, and `kilo`'s four `:free` ids
+  re-measured clean the same day — so the naming convention was never the problem. **These four rows were.**
+
+- **All four are replaced by ids verified free in the same run**, with `caps` copied verbatim from the rows
+  this pool already carries evidence for under `kilo`, so no capability or speed number is invented:
+  `nvidia/nemotron-3-ultra-550b-a55b:free`, `nvidia/nemotron-3-super-120b-a12b:free`,
+  `cohere/north-mini-code:free`, `poolside/laguna-s-2.1:free`. `openrouter` therefore **no longer offers a
+  vision model**; the default-on pool's visual option is `cerebras/llama-4-maverick-17b-128e-instruct`
+  (`zhipu/glm-4.6v-flash` stays available, off by default). A missing capability slot was preferred to a
+  fabricated rating.
+
+- **`limits.note` corrected, with its source named.** It said *"20 RPM / 200 RPD"* and read the tier off the
+  account **balance**. OpenRouter's own documentation constants (fetched 2026-10-15) are
+  `FREE_MODEL_RATE_LIMIT_RPM=20`, `FREE_MODEL_NO_CREDITS_RPD=50`, `FREE_MODEL_HAS_CREDITS_RPD=1000`,
+  `FREE_MODEL_CREDITS_THRESHOLD=10`, and the tier is selected by **all-time credits purchased** — not by
+  balance. `limits.rpd` is now `50`, and the "unverified relaxation value" disclaimer is gone because the
+  value now has a source.
+
+- **Two silent-drop sites closed.** `listProviderModels()` rebuilds every pair field-by-field and would have
+  dropped the new `verified` field without a word; `freezePool()` did not freeze it. Both are fixed and
+  guarded: the guard walks the pool → pair path and asserts the evidence survives and is frozen with the pool.
+  `normalizeModel()` deliberately **rejects** `verified` from user declarations — evidence is our measurement,
+  not a self-certification — and that rejection is asserted, so the drop can never quietly become a pass-through.
+
+- **`xfyun/lite` declared a context window four times larger than the vendor's.** The row said
+  `contextWindow: 32768`; iFlytek's own HTTP interface documentation (fetched 2026-10-15 over the direct,
+  non-proxied path) states **Lite: max input 8K / max output 4K**, in a table whose `Max`/`Pro` columns use
+  `8K\32K`-style *alternatives* while **Lite's cells are single-valued**. The transfer is proven by the row's
+  own `maxTokens: 4096`, which matches that table's 4K exactly: **the output cell was copied correctly and the
+  input cell was not.** It is now `8192` (`8192` is derived from the table's own `4K = 4096` notation and is
+  labelled as a derivation, not as vendor text). An over-large window is worse than an error, because it sends
+  a context the endpoint cannot hold and the failure is silent.
+
+- **A wrong claim about this machine's network path is retracted.** The 0.7.0 notes said the measurements were
+  taken without a proxy "so a domestic direct connection may behave differently". Both halves were wrong: this
+  host uses a **split-tunnel VPN** (domestic names direct, foreign traffic proxied), and its DNS resolves
+  **every** name into the `198.18.0.0/15` fake-IP pool — so *"resolves to a non-public address"* is
+  **always true and carries no information**, and it was never evidence about a remote site. The proof is that
+  one call rejected `www.xfyun.cn` and `github.com` **together**. Re-measured over the direct path:
+  `www.xfyun.cn` **200 / 128 382 B / 618 ms**, `modelscope.cn` **200 / 4 639 B**.
+
+### Added
+
+- **`lib/free.js`, the only place that decides what "free" means:**
+  `pricing.prompt === "0" && pricing.completion === "0" && endpoints >= 1`. It never reads a model id, so the
+  `:free` suffix cannot leak back in as a criterion. The evidence shelf life lives there too
+  (`FREE_VERIFIED_STALE_DAYS = 60`, reported; `FREE_VERIFIED_BLOCK_DAYS = 90`, blocking), so the gate and the
+  tests cannot disagree about the threshold.
+
+- **Every free row that can be price-checked now carries a `verified` evidence record** — when it was taken,
+  the method, the price fields observed, the serving-endpoint count and a sha256 of the raw response body.
+  All eight such rows (`openrouter`, `kilo`) carry one. `routeway`'s four cannot: its catalogue publishes
+  **no** pricing field at all, so they are **declared unproven and stay `enabled: false`** rather than being
+  handed evidence that does not exist.
+
+- **The model picker states the criterion and the date.** A verified row's description ends with
+  `free: pricing.prompt === "0" && pricing.completion === "0" && endpoints >= 1, verified 2026-10-15
+  (anonymous price check)`; a row without evidence prints nothing.
+
+- **`tests/free-model-guard.test.mjs` — 13 assertions against committed fixtures**: the byte-exact anonymous
+  catalogues of 2026-10-15 (`openrouter` 774 095 B, sha256 `fe83d51d…`; `kilo` 490 164 B, `57257ffe…`) plus
+  the four per-model `/endpoints` bodies, so "free" is recomputable offline instead of taken on trust. Evidence
+  older than 90 days fails the guard; the fix is to re-measure, not to widen the window (both thresholds are
+  pinned by an assertion of their own).
+
+- **`tests/providers-context-window-invariants.test.mjs`** — a *structural* guard (`maxTokens <= contextWindow`,
+  both positive integers) over every model in the pool. It is explicitly **not** a claim that any window has
+  been verified against its vendor, and the header records the evidence-linked ceiling guard that was written,
+  measured and **rejected**: it would have red-flagged `sambanova/MiniMax-M3 = 1 048 576`, whose own `source`
+  reads *measured*, while still missing the `32768` bug — any threshold low enough to catch it also catches
+  confirmed values such as `github/openai/gpt-4.1 = 8000`. **Guarding a relative error with an absolute
+  threshold is a category error**; that reasoning is kept in the file so it is not re-proposed.
+
+- **Gate G9 (`--online`)**: re-reads the public catalogue anonymously and reports drift and staleness per free
+  row. Informational, like G7 and G8 — an upstream free set changing is an event, not a defect in this plugin.
+  Measured 2026-10-15: `4 free rows vs 17 zero-priced upstream entries of 462: 0 drifted, 0 stale`.
+
+### Notes on scope
+
+- **The four dead ids are not quietly deleted — they are named in the guard.** The test asserts they are *not*
+  in the live zero-price set, so re-adding one fails loudly instead of shipping a dead row again.
+- **No credential was used for any measurement in this release.** Every price and endpoint fact comes from
+  anonymously readable endpoints. Whether a resurrected id would bill an account cannot be answered from here,
+  and is not claimed: the defect was *unservable*, not *charged*.
+- **The `@generated:catalog` markers in `lib/providers.js` are not backed by a generator in this tree.** The
+  pool data block is hand-maintained, `research/provider-catalog.json` (which the module header names as its
+  source) is absent, and no gate covers it — G6 checks only the browser-half `client-setup` block. Flagged
+  rather than fixed here; as written, the markers promise more than the repository delivers.
+- **`_lead/` is now ignored by git.** It is the workbench (probes, raw responses, measurements, design notes)
+  and this package is published; a `git add -A` in the release ceremony was one stray write away from putting
+  internal notes on GitHub. The tracked `_lead/flake-probe.mjs` is unaffected — gitignore never untracks a file
+  already in the index.
+
 ## [0.7.0] - 2026-10-15
 
 **The pool goes from 12 providers to 18 — and all six additions say out loud what their free tier is
@@ -48,7 +154,7 @@ actually worth.**
   |---|---|
   | `sambanova` | **No free tier left.** Upstream retired it in V23 *because* the free tier was permanently cancelled — with a valid key, chat answers `402 payment method required`. Its `baseURL` is **not** an upstream transcription (zero matches in the upstream tree): it comes from vendor documentation. Its `/models` still answers `200`, which upstream itself records as a billing-gate false positive. |
   | `siliconflow` | The `.com` endpoint is a **one-time $1 trial credit, not a recurring free tier**. Upstream keeps the platform for its *free generative-media* models (image/TTS), which this plugin's LLM seam cannot consume; the chat row it once listed is paid ($0.06/M) and upstream deleted that row. |
-  | `modelscope` / `xfyun` | Free quota **cannot be verified without a credential**, so neither publishes an RPM/RPD number. `xfyun`'s model id is a **specification placeholder** that still needs a real key. |
+  | `modelscope` / `xfyun` | Free quota **cannot be verified without a credential**, so neither publishes an RPM/RPD number. `xfyun`'s model id is **vendor-documented** (`lite`, marked 支持免费使用) but has never been used with a real key — see **Corrected**. |
   | `huggingface` / `routeway` | The only two with **reusable free *chat* quota evidence** — and in both cases it is upstream's own statement (a recurring $0.10/mo router credit; `:free` routes cost $0), not a measurement made here. |
   | `modelscope` / `xfyun` / `siliconflow` | **Chinese real-name verification is required** before a key serves traffic, and `modelscope` additionally needs the account bound to an Alibaba Cloud China-site account. That is a real barrier to this project's "zero config" positioning, so it is labelled rather than glossed over. |
 
@@ -70,15 +176,68 @@ actually worth.**
 ### Notes on scope
 
 - **The six entries are catalogued, not vouched for.** `xfyun` is `confidence: 'speculative'` for exactly
-  that reason: beyond upstream's prose that "the Lite model is the free one", nothing supports its model id,
-  and all three ways to close the gap (upstream migrations, an anonymous `GET /models`, vendor documentation)
-  fail from this machine. A guessed vendor id would be worse than a placeholder, so the placeholder stays.
+  that reason, though **not** for its model id any more: the vendor's own API documentation was reached over
+  the direct path and confirms `lite` as an accepted `model` value marked 支持免费使用 — see **Corrected**
+  below, which also withdraws the claim that the documentation sites were unreachable. What still holds is
+  that no valid credential has ever been used against it.
 - **No provider was contacted with a real credential in this release, and none of the six was ever asked for
   a completion.** Status codes and public catalogs only.
 - One transcription error surfaced during the release and was resolved in favour of the raw artifact: a probe
   report's summary table listed two `routeway` `:free` context windows as 62 000, while the catalog captured
   in the same run says **42 000**. `lib/providers.js` and both READMEs use 42 000.
 - `package.json` gains **no** `dependencies` — the only manifest change is the version.
+
+### Corrected
+
+- **Two reachability claims in this release rested on a false premise, and both READMEs are corrected in
+  place rather than silently.** The version number stays **0.7.0**: this is a documentation correction, not a
+  new release. Nothing was deleted and no number was quietly changed — the wrong sentences are named here
+  first, then replaced.
+
+  **What was wrong, claim 1 — the host's location.** Both READMEs said the probes came from *"a direct
+  connection with no proxy configured (all six proxy environment variables empty) whose egress is
+  US-Los Angeles, not mainland China"*, and concluded that no result could be extrapolated to a domestic
+  direct connection. **The premise is false: the probe host runs a VPN in split-tunnel mode**, so traffic to
+  mainland-Chinese destinations goes out **direct** and only overseas traffic uses the proxy. **US-LA is where
+  the overseas path exits; it is not where the host is.** The "domestic-reachability results are not
+  extrapolable" disclaimer therefore had no basis, and is removed. Note what this does *not* change: it
+  strengthens, not weakens, the `modelscope` / `xfyun` / `siliconflow` results, because those three are
+  mainland hosts and were in fact reached **over the direct path** — the path a domestic user shares. The
+  error was **reading a proxy exit as the host's location**.
+
+  **What was wrong, claim 2 — a tool limit read as a site property.** A verification attempt reported that
+  the Chinese vendor documentation site *"resolves to a non-public IP address"*, and that was carried into
+  both READMEs and into `lib/providers.js` as evidence that **Chinese vendor/documentation sites are
+  unreachable from this machine**. **It was never evidence of that.** The message is this project's own
+  **DNS guard**: a split-tunnel VPN answers DNS with **fake-IP** addresses drawn from the reserved
+  benchmarking range `198.18.0.0/15`, and the fetch tool refuses any hostname that resolves there. The
+  decisive check is that it rejected `www.xfyun.cn` **and `github.com` with the identical sentence in the
+  same session** — a guard, not a measurement. Re-measured on 2026-10-15 with an ordinary HTTP client over
+  the direct path: `www.xfyun.cn`'s doc page returned **`200`, 128 382 B in 618 ms (`Server: Tengine`)**,
+  `modelscope.cn` returned **`200`**, and `spark-api-open.xf-yun.com` and `api.siliconflow.cn` both returned
+  **`401`** — i.e. hosts answering, wanting credentials. The sites were reachable all along; only the fetch
+  tool could not read them. The error was **reading the limit of the observing instrument as a property of
+  the observed object** — the same failure mode as the wrong 0.6.1 table recorded below, where a 403 from an
+  anonymous probe was read as "region blocked".
+
+  **What this unlocked.** With the documentation sites reachable again, `xfyun`'s model id was re-attempted
+  over the direct path and **succeeded**: the vendor's official HTTP API page lists the accepted `model`
+  values as `4.0Ultra` / `generalv3.5` / `max-32k` / `generalv3` / `pro-128k` / `lite`, and its version table
+  describes **Lite** as 轻量级 with **支持免费使用** (*supports free use*). So `lite` is **vendor-documented
+  rather than a specification placeholder** — the id itself was already right, and is unchanged; what changed
+  is that it now has a source. `confidence` stays `speculative` because no valid credential has ever been
+  used against it. The `lib/providers.js` note that asserted *"本机网络无法访问任何中文厂商/文档站点"* is
+  **withdrawn** on the same grounds.
+
+  **Unchanged by this correction:** `routeway`'s anonymous chat path remains an open **`AMBIGUOUS`**. A
+  single response still cannot separate *anonymous rejected* from *region rejected*, and settling it still
+  needs a real key or a **second egress IP** — the split-tunnel correction removes a false premise, it does
+  not supply a second measurement. Nothing in either README depends on that path being open.
+
+  **Method rule this adds.** Every reachability claim in both READMEs now names **which path it was measured
+  on** (direct vs. proxy), because the two are different measurements. And no reachability verdict may be
+  sourced from a **fetch-tool error**: that reports the tool's policy, while reachability requires an HTTP
+  client that actually speaks to the host.
 
 ## [0.6.3] - 2026-10-15
 
