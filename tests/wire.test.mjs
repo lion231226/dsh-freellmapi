@@ -15,6 +15,7 @@ import {
   collectImageParts,
   contentHasImage,
   imagePlaceholder,
+  suppressedReasoningEffort,
   toOpenAiMessages,
   toOpenAiTools,
 } from '../lib/wire.js'
@@ -185,19 +186,48 @@ test('buildChatRequest honours the maxTokensField switch', () => {
   assert.equal(withCompletion.max_tokens, undefined)
 })
 
-test('buildChatRequest forwards temperature, stop and reasoning effort', () => {
+test('buildChatRequest forwards temperature, stop and tools', () => {
   const body = buildChatRequest({
     model: 'auto',
     messages: [],
     temperature: 0.2,
     stop: ['\n\n'],
-    reasoningEffort: 'high',
     tools: [{ name: 't', description: '', parameters: {} }],
   }, {})
   assert.equal(body.temperature, 0.2)
   assert.deepEqual(body.stop, ['\n\n'])
-  assert.equal(body.reasoning_effort, 'high')
   assert.equal(body.tools.length, 1)
+})
+
+test('★ reasoning effort is withheld by default, because pool support is unverified', () => {
+  // Whether the free pool accepts `reasoning_effort` could not be established:
+  // probing four providers with a control and with low/medium/high/max returned
+  // byte-identical responses, because all four reject at auth or model resolution
+  // and never reach field validation. Forwarding an unverified control to every
+  // provider is the silent-degradation shape the project forbids, so the default
+  // is to withhold it.
+  const body = buildChatRequest({
+    model: 'auto',
+    messages: [],
+    reasoningEffort: 'high',
+  }, {})
+  assert.equal('reasoning_effort' in body, false, 'an unverified control must not be sent by default')
+})
+
+test('★ reasoning effort is forwarded only when the operator opts in', () => {
+  const body = buildChatRequest({
+    model: 'auto',
+    messages: [],
+    reasoningEffort: 'high',
+  }, { forwardReasoningEffort: true })
+  assert.equal(body.reasoning_effort, 'high', 'the opt-in must actually forward the value')
+})
+
+test('★ suppressedReasoningEffort reports exactly what it withholds', () => {
+  assert.equal(suppressedReasoningEffort({ reasoningEffort: 'high' }, {}), 'high')
+  assert.equal(suppressedReasoningEffort({ reasoningEffort: 'high' }, { forwardReasoningEffort: true }), undefined)
+  assert.equal(suppressedReasoningEffort({}, {}), undefined)
+  assert.equal(suppressedReasoningEffort({ reasoningEffort: null }, {}), undefined)
 })
 
 test('contentHasImage only reports image blocks', () => {

@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.4] - 2026-10-15
+
+**`reasoning_effort` was sent to every provider. Whether any of them accept it was never established, so it is
+now withheld by default — and the withholding is reported.**
+
+### Changed
+
+- **`reasoning_effort` is no longer forwarded by default.** The adapter takes DSH's `reasoningEffort` and wrote
+  it into every request body as the OpenAI-compatible `reasoning_effort` field — verbatim, to every provider in
+  the pool. Nothing in the pool's provenance mentions that field, and the question could not be settled
+  anonymously: probing four providers (kilo, llm7, openrouter, ovh) with a control request and with
+  `low`/`medium`/`high`/`max` returned **byte-identical responses to the control in every case**, because all
+  four reject at authentication or model resolution and never reach field validation. That is an `AMBIGUOUS`
+  measurement, not evidence of support.
+
+  Sending an unverified control at endpoints that may not know it means the complaint arrives from upstream,
+  after a wasted request and a failover — the silently-degrading shape rule 1 forbids. Set
+  **`forwardReasoningEffort: true`** to send it anyway, once a real credential has established which values a
+  provider accepts.
+
+- **The withheld value is reported, not hidden.** When a request carries a `reasoningEffort` that will not be
+  forwarded, the routing log records it — control, value and reason. A request control that DSH believes it set,
+  and that never reaches a provider, must leave a trace or it is a silent degradation.
+
+### Added
+
+- **`forwardReasoningEffort`** (default `false`) and `suppressedReasoningEffort(options, config)`, exported from
+  `lib/wire.js` so the decision to drop a control is one named function rather than an inline condition.
+
+- **Five guards**: the default withholds the field; the opt-in forwards it; the suppression helper reports
+  exactly what it withholds (including `null` and absent); end to end, the field is absent from the upstream
+  body *and* the drop appears once in the log; and opting in produces no log line.
+
+### Notes on scope
+
+- **This does not make `auto` support reasoning effort — it stops it from pretending.** Withholding is the
+  honest default, not a feature. Establishing which values each provider accepts needs a real credential; the
+  path is recorded in `_lead/research/routing-redesign.md` §E.
+- **A mechanism I nearly implemented does not exist.** The first plan was to declare
+  `adapterDefaults.reasoningEffort: true` as an "adapter owns this field" opt-out. Reading the artifact showed
+  `adapterDefaults` is **computed by DSH** from whether a value was injected — it means the opposite of what the
+  plan assumed, and declaring it would have changed nothing. Caught before any code was written.
+- **Reverse injection (on a copy)**: 3/3 injected defects reddened the guard — dropping the gate, ignoring the
+  opt-in, and silencing the report — with the copy's sha256 compared before and after each.
+
 ## [0.7.3] - 2026-10-15
 
 **A failure message said `[object Object]`. It said it during a compaction loop — the moment a reader most needs

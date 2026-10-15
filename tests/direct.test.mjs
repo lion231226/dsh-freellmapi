@@ -54,6 +54,48 @@ const polarityPool = () => startMockPool([
 // the core promise
 // ---------------------------------------------------------------------------
 
+test('★ a withheld reasoning effort is reported, and never reaches the upstream body', async () => {
+  // Two halves of one property. Withholding the control is only defensible if it
+  // is *observable*; sending it is only correct if the operator opted in. A test
+  // that checked only the body would happily pass while the drop stayed silent.
+  const pool = await polarityPool()
+  try {
+    const mounted = mountPlugin({ config: { mode: 'direct', providers: pool.config } })
+    const answer = assertValidChunkSequence(await collect(
+      mounted.adapter.stream(ask('hello', { reasoningEffort: 'high' })),
+    ))
+    assert.equal(answer.finish.kind, 'stop')
+
+    const sent = pool.requests('fastmock').at(-1)
+    assert.equal('reasoning_effort' in (sent?.body ?? {}), false,
+      'the unverified control must not reach the provider by default')
+
+    const reported = mounted.logger.info.filter((line) => line.includes('not forwarding reasoningEffort'))
+    assert.equal(reported.length, 1, `the drop must be reported once: ${JSON.stringify(mounted.logger.info)}`)
+    assert.match(reported[0], /reasoningEffort=high/)
+  } finally {
+    await pool.close()
+  }
+})
+
+test('★ the opt-in actually puts the control on the wire', async () => {
+  const pool = await polarityPool()
+  try {
+    const mounted = mountPlugin({
+      config: { mode: 'direct', providers: pool.config, forwardReasoningEffort: true },
+    })
+    assertValidChunkSequence(await collect(mounted.adapter.stream(ask('hello', { reasoningEffort: 'high' }))))
+    const sent = pool.requests('fastmock').at(-1)
+    assert.equal(sent?.body?.reasoning_effort, 'high', 'opting in must forward the value')
+    assert.equal(
+      mounted.logger.info.filter((line) => line.includes('not forwarding')).length, 0,
+      'nothing is withheld when the operator opted in',
+    )
+  } finally {
+    await pool.close()
+  }
+})
+
 test('core promise: one `auto` model routes simple to the fast model and complex to the strong model', async () => {
   const pool = await polarityPool()
   try {
