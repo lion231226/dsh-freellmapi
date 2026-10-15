@@ -41,6 +41,51 @@ no-data distinction, and stopping the attempt tally each redden the guard.
 its gap line. None of that changes routing behaviour, which is why it can land
 separately.
 
+## [0.7.17] - 2026-10-15
+
+**An acceptance checklist, and a briefing that tells the accepting session it is itself the subject.**
+
+### Added
+
+- **`docs/ACCEPTANCE.md`** — a four-stage acceptance checklist where every item is written as *"do this →
+  expect that"*, because "looks right" is not a criterion (rule 3). It exists because the next acceptance run
+  will happen **on a session running the plugin under test**, which is a shape this project had not planned
+  for.
+
+  - **Stage 0 is a bootstrap check and may not be skipped.** It asks the session to confirm it received its
+    instructions intact, answered coherently, completed a tool call, and — the important one — **whether it
+    can detect signs of its own context being compacted**. If any answer is "no", the run stops there.
+  - The reasoning is stated in the file: a broken plugin breaks the acceptance session **first**, and the
+    natural misreading is "I misunderstood" rather than "the subject is faulty". Worse is continuing on a bad
+    foundation, which makes every later observation untrustworthy.
+  - **Stage 1 needs no working model** (gate, test suite, three-way version check), so it stays available even
+    when stage 0 fails.
+  - **Stage 2 records what a session can actually witness**: which route was selected, whether tool calls
+    returned, whether an image was understood, and — the original complaint, re-tested live — whether signs of
+    compaction appear and at roughly which turn, with a **control group** (pinned model vs `auto`) called out
+    as the decisive comparison.
+  - **Stage 3 fixes the error format** (time / route / expected / actual / reproducible / evidence) and
+    requires `actual` to be **transcribed rather than paraphrased**. It also names the session-log path and
+    warns that it is **concatenated zstd frames** — decompressing the file whole yields a couple hundred bytes,
+    and that is a decoder artifact, not an empty log (L20, which nearly buried a correct review).
+
+- **`docs/NEW-SESSION.md` rewritten with two briefings.** The acceptance one leads with the premise the
+  session needs in order to interpret its own symptoms: *you are running on the subject; if you cannot
+  remember earlier turns, lose tool results, or emit a tool call as prose, that is evidence about the plugin,
+  not a personal failure.* It closes with the instruction that matters most — **"passing acceptance on a
+  broken plugin is the real failure"** — and a fallback: switch to DeepSeek, paste the findings file, and
+  report the run as incomplete.
+
+  The development briefing is kept, now pointing first at the **skill** (cheaper in context than the full
+  rules file) and carrying the five iron rules plus the known-unwired `telemetry.js` state.
+
+- **Both briefings end with the two traps that actually cost time here**: a stale UI list is a **stale process
+  module**, not an unsynced UI (the profile is `link:`-installed, so the code on disk is already current); and
+  a credential that authenticates but cannot do inference (OpenRouter's `is_management_key: true`) presents as
+  *"the models are listed but none of them work"* — so replace the key before suspecting the router.
+
+Suite **468 passed, 0 failed**; gate G1–G10 PASS.
+
 ## [0.7.16] - 2026-10-15
 
 **The skill ships with the repository. 0.7.15 put it in the wrong place for the wrong reason.**

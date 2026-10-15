@@ -312,5 +312,6 @@ DSH 的插件契约大多没有文档。判断"平台支持什么"，读 `app.as
 | 发布 | §1 的[A]发布仪式 |
 | **换个项目也要用的判据** | `<repo>/.dsh/skills/dsh-freellmapi/SKILL.md`（随仓库分发；工作区那份是它的符号链接） |
 | 改了东西，SKILL 要不要更新 | 规则 9 的四个判据（逐条问，答案写进账本"固化成"列） |
-| 新会话起步 | `docs/NEW-SESSION.md` |
+| **验收插件**（用插件自己跑） | `docs/ACCEPTANCE.md` —— 4 阶段 + 固定错误格式 + 自举失败处理 |
+| 新会话起步（验收 / 开发两套引导词） | `docs/NEW-SESSION.md` |
 | 设计说明与每一处刻意偏离 | `IMPLEMENTATION.md` |
