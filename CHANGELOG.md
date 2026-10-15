@@ -9,6 +9,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.7.0] - 2026-10-15
+
+**The pool goes from 12 providers to 18 — and all six additions say out loud what their free tier is
+actually worth.**
+
+### Added
+
+- **Six providers, every one of them shipped `enabled: false`** (`docs/EXPANSION-v0.7.md` §3.1, stage S2):
+  `modelscope` (ModelScope 魔搭), `xfyun` (iFlytek Spark 讯飞星火), `siliconflow` (SiliconFlow 硅基流动),
+  `sambanova`, `huggingface` (the Inference Providers router) and `routeway` — 15 models between them, taking
+  the pool to **18 providers / 45 models**. `DEFAULT_ENABLED_PROVIDERS` is untouched: `groq`, `cerebras`,
+  `openrouter`, `llm7`, `kilo`. The order is the point: catalogue first with the switch off, verify with a
+  real key later (S3). Adding a disabled entry costs nothing; enabling an unverified one would cost a route.
+
+  Each entry carries per-model `source:`/`note:` citations naming the upstream file and line (upstream commit
+  `5a3abac8…`), which is the licence record — and, wherever a value is *not* from upstream, a plain sentence
+  saying so instead of a citation that only looks like evidence.
+
+- **`contextWindow` provenance is no longer one story.** `sambanova`'s four values and `routeway`'s four are
+  **measured** from their own anonymously readable catalogs (2026-10-15), as are `huggingface`'s two — the
+  latter taken from the *selected backend*, deliberately not the largest value on offer for that id.
+  Everything else is marked an estimate or a conservative default inside the entry. Two `routeway` `:free`
+  routes declare **42 000**, not the 62 000 the rest of its `:free` family declares.
+
+### Documented
+
+- **How reachable the six are, and by which method** (an anonymous probe *and* a syntactically valid but
+  bogus-credential probe, 2026-10-15): five are reachable. `routeway`'s **anonymous chat path is the one open
+  `AMBIGUOUS`** — with no credential it gets a Cloudflare interstitial (`403`, HTML, "Attention Required"),
+  while the same request carrying a bogus `Authorization` header reaches the origin and gets a plain-JSON
+  `401 Invalid API key`. One response cannot separate *anonymous rejected* from *region rejected*, so both
+  READMEs say so and nothing in this release depends on that path.
+
+- **What each new "free tier" is really worth, in the README row itself rather than in a footnote.**
+
+  | provider | the honest version |
+  |---|---|
+  | `sambanova` | **No free tier left.** Upstream retired it in V23 *because* the free tier was permanently cancelled — with a valid key, chat answers `402 payment method required`. Its `baseURL` is **not** an upstream transcription (zero matches in the upstream tree): it comes from vendor documentation. Its `/models` still answers `200`, which upstream itself records as a billing-gate false positive. |
+  | `siliconflow` | The `.com` endpoint is a **one-time $1 trial credit, not a recurring free tier**. Upstream keeps the platform for its *free generative-media* models (image/TTS), which this plugin's LLM seam cannot consume; the chat row it once listed is paid ($0.06/M) and upstream deleted that row. |
+  | `modelscope` / `xfyun` | Free quota **cannot be verified without a credential**, so neither publishes an RPM/RPD number. `xfyun`'s model id is a **specification placeholder** that still needs a real key. |
+  | `huggingface` / `routeway` | The only two with **reusable free *chat* quota evidence** — and in both cases it is upstream's own statement (a recurring $0.10/mo router credit; `:free` routes cost $0), not a measurement made here. |
+  | `modelscope` / `xfyun` / `siliconflow` | **Chinese real-name verification is required** before a key serves traffic, and `modelscope` additionally needs the account bound to an Alibaba Cloud China-site account. That is a real barrier to this project's "zero config" positioning, so it is labelled rather than glossed over. |
+
+- **The generated browser table only carries `enabled === true` providers, so the six additions do not
+  appear in the settings-page key rows — expected behaviour, not a defect.** `lib/client.js`'s
+  `@generated:client-setup` block is produced by `tests/regenerate-client-setup.mjs`, which filters on the
+  default-enabled set; an entry that ships off contributes nothing there, and gate G6 confirms the block is
+  current and unchanged by this release. Enabling one of the six by hand will **not** grow a key row either —
+  that is the coverage gap already recorded in 0.6.1, restated here because 0.7.0 adds six more entries to it.
+  Set `providers.<id>.apiKeyEnv` and store the credential, or paste it on the plugin's own settings page.
+
+- **Probing method, once more: the request body can flip the verdict.** Both READMEs' reachability sections
+  now record that a chat probe sent with a **non-existent model id** produces the opposite answer —
+  `modelscope` returns `400 Invalid model id`, `sambanova` returns `404 model_not_found` — and neither can be
+  told apart from *"this provider's chat is keyless"*, because the request never reaches the credential check.
+  Replaying the identical request with a **real id from the catalog** returned `401` from both. Same URL,
+  same headers, different body, opposite conclusion.
+
+### Notes on scope
+
+- **The six entries are catalogued, not vouched for.** `xfyun` is `confidence: 'speculative'` for exactly
+  that reason: beyond upstream's prose that "the Lite model is the free one", nothing supports its model id,
+  and all three ways to close the gap (upstream migrations, an anonymous `GET /models`, vendor documentation)
+  fail from this machine. A guessed vendor id would be worse than a placeholder, so the placeholder stays.
+- **No provider was contacted with a real credential in this release, and none of the six was ever asked for
+  a completion.** Status codes and public catalogs only.
+- One transcription error surfaced during the release and was resolved in favour of the raw artifact: a probe
+  report's summary table listed two `routeway` `:free` context windows as 62 000, while the catalog captured
+  in the same run says **42 000**. `lib/providers.js` and both READMEs use 42 000.
+- `package.json` gains **no** `dependencies` — the only manifest change is the version.
+
 ## [0.6.3] - 2026-10-15
 
 **A wrong claim, a gate that would have caught it, and the rules this project runs on.**

@@ -1,8 +1,8 @@
 # dsh-freellmapi
 
 **给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 做免费额度多 provider 智能路由。**
-十几家免费池藏在一条 DSH provider 路由背后，按每次请求的复杂度自动选型，按能力/速度排序，
-429/5xx 自动故障转移。
+十八条 provider 条目藏在一条 DSH provider 路由背后——其中**五家开箱启用，且这五家都有免费额度**——
+外加逐请求的复杂度分类器、能力/速度排序与 429/5xx 自动故障转移。
 
 ```text
 装插件  →  启动 DSH  →  模型选 provider "freellmapi" + model "auto"  →  它就能答
@@ -48,7 +48,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.6.3   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.7.0   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -84,7 +84,7 @@
 | | |
 |---|---|
 | **自包含的路由** | 路由智能在插件里。默认的 `direct` 模式不需要网关、不需要常驻进程、不需要 Docker，只要有 DSH。 |
-| **内置 12 家 / 30 个模型的池子** | Groq、Cerebras、OpenRouter、GitHub Models、Mistral、Z.ai（智谱）、火山方舟、LongCat、LLM7、Kilo、NVIDIA NIM、OVH AI Endpoints——每个模型都带能力、速度、上下文、视觉与工具调用的事实标注。 |
+| **内置 18 家 / 45 个模型的池子** | Groq、Cerebras、OpenRouter、GitHub Models、Mistral、Z.ai（智谱）、火山方舟、LongCat、LLM7、Kilo、NVIDIA NIM、OVH AI Endpoints，加上 0.7.0 新增的六家——魔搭（ModelScope）、讯飞星火（iFlytek Spark）、硅基流动（SiliconFlow）、SambaNova、HuggingFace Router、Routeway——每个模型都带能力、速度、上下文、视觉与工具调用的事实标注。**十八家里只有五家开箱启用。** |
 | **逐请求的复杂度路由** | 每个请求都被打分并分成 `simple` / `medium` / `complex` 三档；档位决定排序里"能力优先"还是"速度优先"。一句"列出目录里的文件"和一个带 12 个工具的重构任务，不会落到同一个模型上。 |
 | **自动故障转移** | 被限流（429）、报错（5xx）、超时或 `model_unavailable` 的候选会被"停车"，然后按排名试下一个——**且只允许在第一个 chunk 发出之前**换家，所以一条回答绝不会由两个模型拼接而成。 |
 | **健康度与冷却** | **首次可重试失败就已经停车**（2 分钟），之后每次连续失败升一级：2 分钟 → 10 分钟 → 1 小时 → 24 小时。provider 给的 `Retry-After` 永远优先；凭据被拒（401/403）则该家停车 24 小时。降权会按 60 秒半衰期衰减，所以一次 429 绝不会变成"无期徒刑"。 |
@@ -156,7 +156,8 @@ key 是性价比最高的一步：默认候选池是 `groq`、`cerebras`、`open
 >
 > 卡片只为**默认开启**的家提供密钥输入行（`groq`、`cerebras`、`openrouter`、`llm7`、`kilo`）。浏览器
 > 那份表是**构建时**按默认值生成的，所以你自己通过 `providers.<id>.enabled` 打开的家**不会**长出密钥
-> 行——那种情况请直接设置它的 `apiKeyEnv` 并存好凭据。
+> 行——那种情况请直接设置它的 `apiKeyEnv` 并存好凭据。0.7.0 新增的六家全部属于这一类：**即使你把它
+> 打开，卡片里也不会为它长出密钥行**（这是 0.6.1 变更记录里已登记的已知缺口，不是 bug）。
 
 ### 哪些家可达 —— 以及**该怎么问**
 
@@ -181,10 +182,30 @@ key 是性价比最高的一步：默认候选池是 `groq`、`cerebras`、`open
 - **`403` 一律视为歧义**：必须换另一种方法再探一次，它才有意义。
 - `404`/`400`/`422` 通常说明路径不同，不是主机不可达。
 
-门把这套自动化了：`node tools/gate.mjs --online` 的 **G7** 会按每家适合的方法探测，并在结果旁**打印
-所用方法**——结论可被审计，而不是只能被相信。
+**请求体也是方法的一部分。** 用**不存在的 model id** 去探 chat 端点，会得出**相反**的结论：
+`modelscope` 回 `400 Invalid model id`、`sambanova` 回 `404 model_not_found`，而两者都**无法**与
+"这家的 chat 不需要凭据"区分——请求根本没走到凭据校验那一步。换成**目录里的真实 id** 重放同一请求，
+两家双双回 `401`。同一个 URL、同一组 header，只换了 body，结论就翻了。
 
-按此方法在 2026-10-15 实测：**池内 12 家全部可达**，0 家不可达，包括旧表里被称为"被封锁"的那两家。
+门把 header 那半套自动化了：`node tools/gate.mjs --online` 的 **G7** 会按每家适合的方法探测，并在结果
+旁**打印所用方法**——结论可被审计，而不是只能被相信。但 G7 只请求 `GET {baseURL}/models`，所以它的
+绿要读成"**主机有应答**"，而不是"这家配上 key 就一定能给你补全"。
+
+按此方法在 2026-10-15 实测：
+
+- **0.7 之前的 12 家全部有应答**（G7，2026-10-15），包括旧表里被称为"被封锁"的那两家。
+- **0.7.0 新增的六家**（匿名 + 假凭据各探一次）：`modelscope`、`xfyun`、`siliconflow`、`sambanova`、
+  `huggingface` 可达；**`routeway` 的匿名 chat 路径是唯一一处未定论的 `AMBIGUOUS`**——不带凭据时它的
+  `POST /chat/completions` 拿到的是 Cloudflare 拦截页（`403`、HTML、"Attention Required"），而**带上**
+  一个假 `Authorization` 头的同一请求能抵达 origin，拿到干净 JSON 的 `401 Invalid API key`。单条响应
+  无法区分"拒匿名"与"拒区域"；一把真 key 或换一个出口 IP 才能定论。**本 README 没有任何结论依赖那条
+  匿名路径是通的。**
+
+**探测从哪个出口发出，本身就是结论的一部分。** 这些测量发自**本机直连、未配置任何代理**（六个代理环境
+变量全为空），而出口在**美国洛杉矶**，不在中国大陆。所以这里没有任何一句话声称**国内直连**会得到同样
+结果——对 `modelscope` / `xfyun` / `siliconflow` 尤其如此。应用层的判定（`401`、RFC 6750 凭据挑战、
+origin 的错误 JSON）与出口无关；"**从你的网络能不能到**"有关。
+
 而当某家在你的网络里**确实**不可达时，关掉它就是全部改动，写进
 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`（或插件自己的 `providers` 字段）：
 
@@ -195,10 +216,13 @@ key 是性价比最高的一步：默认候选池是 `groq`、`cerebras`、`open
       someprovider: { enabled: false }
 ```
 
-申请页（2026-10-14 实测可达）：`groq` <https://console.groq.com/keys>、
+申请页（前七家已于 2026-10-14 实测可达）：`groq` <https://console.groq.com/keys>、
 `cerebras` <https://cloud.cerebras.ai/>、`openrouter` <https://openrouter.ai/keys>、
 `mistral` <https://console.mistral.ai/api-keys>、`zhipu` <https://open.bigmodel.cn/usercenter/apikeys>、
 `volcengine` <https://console.volcengine.com/ark>、`longcat` <https://longcat.chat/platform/api_keys>。
+**下面 0.7.0 新增六家的申请页取自池条目自己的 `keyURL` 字段，均未经独立复核**——只有 `modelscope`
+那一个有上游引用；维护者另于 2026-10-15 实测：在用于本次探测的这台机器上，`www.xfyun.cn` 及同类中文
+厂商/文档站点一律解析到非公网地址。
 
 | Provider | `apiKeyEnv` | 申请入口 | 免费额度（上游基线） | 默认 | 备注 |
 |---|---|---|---|---|---|
@@ -214,6 +238,30 @@ key 是性价比最高的一步：默认候选池是 `groq`、`cerebras`、`open
 | `longcat` | `LONGCAT_API_KEY` | — | — | ⬜ 关 · ⚠️ **推测** | 无需实名；模型 id 是推断的，未经实测 |
 | `nvidia` | `NVIDIA_API_KEY` | — | 40 RPM | ⬜ 关 | 能力上限高（`qwen/qwen3-coder-480b-a35b-instruct`），但试用 ToS 写着 "evaluation only"、首字节可能几分钟，另见[限制](#限制与未验证项)里的一条已知缺口 |
 | `ovh` | `OVH_AI_ENDPOINTS_KEY` | — | 2 RPM | ⬜ 关 | **免凭据可用**，但只有 2 RPM |
+| `modelscope` | `MODELSCOPE_API_KEY` | <https://modelscope.cn/my/myaccesstoken> | 上游写过 2000 请求/日，但上游自己已把该数字标为 historical（现按魔粒计费） | ⬜ 关 | 阿里魔搭。**token 只有在账号绑定到阿里云中国站 + 中国实名认证账号之后才能服务流量**——未绑定 token 每次调用都回 `401 please bind your alibaba cloud account before use`。它的 `GET /models` 对**任意**凭据都回 `200`，所以那个端点不能用来校验 key；要用 1-token chat |
+| `xfyun` | `XFYUN_API_KEY` | <https://console.xfyun.cn/> | 无公开的 token/QPS 上限——上游按"不猜"原则置 `null` | ⬜ 关 · ⚠️ **推测** | 讯飞星火。**需中国实名认证。** 鉴权用控制台的 *APIPassword* 当 Bearer token。模型 id `lite` 是**规格占位、未经核实**：上游只说过"免费的是 Lite 档"，而它的目录需要真 key 才能取 |
+| `siliconflow` | `SILICONFLOW_API_KEY` | <https://cloud.siliconflow.com/account/ak> | **没有可循环的免费 chat 额度**——`.com` 端点是一次性 $1 试用额度 | ⬜ 关 · ⚠️ **推测** | 硅基流动。**需中国实名认证。** 上游保留这家是为了它的**免费生成式媒体**模型（图像/TTS），而本插件的 LLM seam 消费不了；它当初登记的 chat 模型是**付费**的（$0.06/M），上游已把那一行删掉 |
+| `sambanova` | `SAMBANOVA_API_KEY` | <https://cloud.sambanova.ai/apis> | **没有——免费额度已被永久取消。** 持有效 key 时 chat 回 `402 payment method required` | ⬜ 关 · ⚠️ **推测** | **收进来是留档，不是当免费额度用。** 上游正是以这个理由在 V23 里把它退役。它的 `baseURL` **不是**上游转录（上游零匹配），来自厂商公开文档；而且它的 `/models` 仍然回 `200`——上游自己把那个 200 记为 billing gate 假阳性 |
+| `huggingface` | `HUGGINGFACE_API_KEY` | <https://huggingface.co/settings/tokens> | 可循环的 **$0.10/月** router 额度，无需绑卡（上游口径：70B 模型上约 1–3M token/月） | ⬜ 关 | Inference Providers router。它的"免费"是**账户额度，不是目录标记**：实测其目录里 296 条 provider 行中 **0 条**标 `is_free: true`。同一个 id 的 `contextWindow` 逐后端不同 |
+| `routeway` | `ROUTEWAY_API_KEY` | <https://routeway.ai/> | 文档写 20 RPM / 200 RPD，上游一次实测观察到更紧的 5 RPM——上游自相矛盾，故四档全 `null` | ⬜ 关 · ⚠️ **推测** | 带 `:free` 路由的聚合器。**它的匿名 chat 路径是唯一一处未定论的 `AMBIGUOUS`**（见上）；解锁它的**不是** `User-Agent` 伪装，而是 `Authorization` 头 |
+
+> **这六行要读成"已登记"，不是"免费且能用"。** 六家全部**默认关闭**（`enabled: false`），都需要你自备
+> key，而且**都不属于"安装即可用"的默认集合**——那个集合是 `groq`、`cerebras`、`openrouter`、`llm7`、
+> `kilo`，在 0.7.0 里没有变。免费额度那一列的真实含义：
+>
+> - **只有 `huggingface` 与 `routeway` 有可复用的免费 *chat* 额度证据**，且两处都是**上游自己的陈述**
+>   （可循环的 $0.10/月 router 额度；`:free` 路由成本 $0）。这两家在这里**都没有用真 key 验证过**。
+> - **`sambanova` 已经没有免费额度了。** 它留在池里是为了留档，不是为了让你免费使用。
+> - **`siliconflow` 免费的那一半，恰好是本插件用不上的那一半**——免费的是生成式媒体模型，chat 模型是
+>   付费的。`modelscope` 与 `xfyun` 不公布任何上限，因此它们的免费额度**在没有凭据的情况下无法核实**；
+>   不要把这两家的 `enabled: true` 读成"免费容量有保证"。
+> - **`xfyun` 与 `siliconflow` 需要中国实名认证**，其 key 才能服务流量；`modelscope` 还额外要求绑定阿里云
+>   中国站账号。这是对"零配置"定位的真实门槛，也正是这几行被标注而不是被默认开启的原因。
+> - ⚠️ **推测**表示该条目的池内 `confidence` 为 `speculative`：转录是尽力而为，**可能是错的**——首当其冲
+>   的就是 `xfyun` 的模型 id。启用它们等于你接受这个风险。
+> - 在这六家保持默认关闭期间，**设置卡片的密钥行不会为它们长出任何一行**。这是预期行为：浏览器那份表是
+>   构建时按 `enabled === true` 的条目生成的（见[添加 key](#添加-key)与 0.6.1 的变更记录）。要启用就自己
+>   设好它的 `apiKeyEnv`，或在插件自己的设置页里粘贴 key。
 
 > **`apiKeyEnv` 是本插件自己的命名约定，不是上游事实。** freellmapi 本身没有这个概念——它的 key 存在
 > dashboard 背后的加密库里。上表每个名字都是**默认值**，你可以逐家覆盖，所以"我们猜偏了"这件事
@@ -248,7 +296,7 @@ providers:
 3. **每个"已启用但拿不到凭据"的家，折叠成 1 条 `setup:<provider>` 引导项。** 它代替那家的模型行，
    因为那些行选中了也只会得到 `MISSING_CREDENTIAL`。
 
-被**关闭**的家（`enabled: false`，十二家里默认就有七家）什么都不产出，它们的模型根本不会出现。
+被**关闭**的家（`enabled: false`，十八家里默认就有十三家）什么都不产出，它们的模型根本不会出现。
 
 `setup:` **不是模型**：选中它不会发起任何请求，它只是一块路牌，名字里带着确切的环境变量名和免费
 申请地址：
@@ -520,7 +568,7 @@ mode: gateway            # 默认是 "direct"；gateway 还需要 baseURL 与一
 
 | 键 | 含义 |
 |---|---|
-| `enabled` | 打开/关闭某家。默认关闭的七家就是靠这个启用 |
+| `enabled` | 打开/关闭某家。默认关闭的十三家就是靠这个启用 |
 | `displayName` | 选择器与日志里的显示名 |
 | `baseURL` | 端点根地址——不用等发版就能修主机名（见 `zhipu`） |
 | `apiKeyEnv` | 你给这家起的凭据引用名 |
@@ -641,7 +689,7 @@ dsh-freellmapi: routed via groq/llama-3.3-70b (model=auto) fallback-attempts=2 t
      ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐
      │ groq       │  │ cerebras   │  │ openrouter │  │ kilo       │  │ llm7       │
      └────────────┘  └────────────┘  └────────────┘  └────────────┘  └────────────┘
-   kilo 与 llm7 不需要任何 key 就能答      ·      池子共 12 家
+   kilo 与 llm7 不需要任何 key 就能答      ·      池子共 18 家
 ```
 
 接口边界上的几点：
@@ -693,8 +741,9 @@ dsh-freellmapi: all 3 candidate(s) failed for tier=medium after 2 attempts — g
 
 缺 key ⇒ 静默移出路由候选，没有警告（列表里它会显示成 `setup:<provider>` 路牌）。另外检查：
 
-- `enabled`——有七家是**默认关闭**的（`github`、`mistral`、`zhipu`、`volcengine`、`longcat`、
-  `nvidia`、`ovh`），要在 `providers.<id>.enabled` 里打开。
+- `enabled`——有十三家是**默认关闭**的（`github`、`mistral`、`zhipu`、`volcengine`、`longcat`、
+  `nvidia`、`ovh`，加上 0.7.0 新增的 `modelscope`、`xfyun`、`siliconflow`、`sambanova`、`huggingface`、
+  `routeway`），要在 `providers.<id>.enabled` 里打开。
 - 硬门槛——没有 `vision: true` 的模型会被带图请求排除，`toolCalling: false` 的会被带工具请求排除，
   `contextWindow` 小于估算 prompt 的也会被排除。
 - 冷却——刚失败过的候选正在停车；路由记录里的 `exclusions` 会明说（"cooling down for another Ns
@@ -741,8 +790,8 @@ Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
 
 你要的 id 池子里没有任何一家提供。message 会列出最接近的三个 id，并告诉你所用的 provider 前缀是否只是
 被默认关闭了。常见原因：拼错；从某家自己的文档里抄来的、并不在本池里的 id；或者该家默认关闭
-（`github`、`mistral`、`zhipu`、`volcengine`、`longcat`、`nvidia`、`ovh`）——先在
-`config.providers.<id>` 里打开它。如果你只是想要一个答案，用 `auto`。
+（`github`、`mistral`、`zhipu`、`volcengine`、`longcat`、`nvidia`、`ovh`，加上 0.7.0 新增的六家）——
+先在 `config.providers.<id>` 里打开它。如果你只是想要一个答案，用 `auto`。
 
 钉住的模型存在、只是正在冷却时报的是 `MODEL_UNAVAILABLE`，并附上每个候选的排除原因；用 `auto` 或等
 冷却结束都可以。
@@ -756,11 +805,13 @@ Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
    `auto:simple` / `auto:medium` / `auto:complex`，或钉一个 `provider/model`。
 2. **没有对真实 provider 跑过端到端。** 本仓库所有测试都跑在进程内的 mock provider 上——这是刻意的，
    为的是 CI 离线可跑。真正发出的外部请求只有维护者那次免凭据探针（5 个请求，4 个 200，1 个 404，
-   记录在 `_lead/live-probe-2026-10-13.md`）。其余一切——每一家有 key 的 provider、每一个额度数字、
-   除免凭据家之外的每一个模型 id——都是**文档级证据**，不是实测。
-3. **只有免凭据那几家被真正测过。** `groq`、`cerebras`、`openrouter`、`github`、`mistral`、`nvidia`
-   等等从未被访问（没有 key），它们的 `baseURL` 与模型 id 来自上游 registry 与迁移脚本。限流数字是
-   2026-04 的基线，会漂移。
+   记录在 `_lead/live-probe-2026-10-13.md`），加上上面可达性一节背后的免凭据可达性与目录探测
+   （`_lead/research/reachability-v0.7.md`，2026-10-15）。**从未用真 key 请求过一次补全**，所以其余一切
+   ——每一家有 key 的 provider、每一个额度数字、除公开目录发布之外的每一个模型 id——都是**文档级证据**，
+   不是实测。
+3. **只发过免凭据请求。** `groq`、`cerebras`、`openrouter`、`github`、`mistral`、`nvidia` 等等都是在**不带
+   凭据**的情况下被访问的（只取状态码与公开目录，从不请求补全），它们的 `baseURL` 与模型 id 来自上游
+   registry 与迁移脚本。限流数字是 2026-04 的基线，会漂移。
 4. **`zhipu` 是池子里风险最高的一项**，`volcengine` / `longcat` 的模型 id 是推断的——这三家都以
    `confidence: 'speculative'` **默认关闭**。启用它们等于你接受该风险。`zhipu` 的主机名在国内站与
    海外站不同且 key 不互通：选错主机名必然 401。
@@ -801,10 +852,14 @@ Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
 | `kilo/poolside/laguna-s-2.1:free` | 131 072 | **262 144** |
 | `kilo/cohere/north-mini-code:free` | 131 072 | **256 000** |
 
-**池里其余各家的 contextWindow 仍然是目录估计，不是实测。** 那些家的 `GET /v1/models` 在没有凭据时
+**池里其余各家的 contextWindow 要么是目录读数、要么是估计。** 那些家的 `GET /v1/models` 在没有凭据时
 一律 `403`，而 OVH 的端点虽然回 `200`，却**根本不发布** context 字段。`lib/providers.js` 里每个条目的
-`source` 注明了它的数字从哪来、什么时候来的——凡是没有写 "measured" 的，都请当作估计值。`llm7` 的两条是
-除上述四家之外唯一的实测行（它的端点发布 `context_window.tokens`）。
+`source` 注明了它的数字从哪来、什么时候来的——凡是没有写 "measured" 的，都请当作估计值。实测行包括
+`llm7` 的两条（端点发布 `context_window.tokens`）、`sambanova` 的四条与 `routeway` 的四条
+（`context_length`，两份目录均于 2026-10-15 匿名抓取——其中两条 `routeway` 的 `:free` 路由声明的是
+**42 000**，而不是它 `:free` 家族其余成员声明的 62 000），以及 `huggingface` 的两条：它的数字是**选定的
+那个后端**的 `context_length`，**刻意不取最大值**。0.7.0 新增且默认关闭的六家里，其余都是保守默认值：
+`modelscope` 的目录**根本没有** context 字段，而 `xfyun` 与 `siliconflow` 的目录需要一把这里没有的凭据。
 
 如果你的环境里某家报出的窗口不同，逐模型覆盖即可，不用改代码：
 
@@ -827,7 +882,7 @@ providers:
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.6.3` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.0` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立

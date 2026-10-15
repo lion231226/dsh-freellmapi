@@ -118,6 +118,63 @@ test('the speculative providers are present but disabled', () => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// v0.7 additions — one guarding test per new provider (AC5)
+// ---------------------------------------------------------------------------
+
+/**
+ * The six providers added in v0.7 (`docs/EXPANSION-v0.7.md` §5). They ship
+ * `enabled: false` on purpose — catalog first, real-key verification later — so
+ * nothing else in the suite walks their rows on purpose: the pool-wide
+ * assertions above only reach them because they happen to iterate every
+ * provider, and a *disabled* provider is one config edit away from serving
+ * traffic. These tests make that edit safe.
+ */
+const V07_PROVIDER_IDS = ['modelscope', 'xfyun', 'siliconflow', 'sambanova', 'huggingface', 'routeway']
+
+test('the six v0.7 providers are in the catalog, off by default, with unique apiKeyEnv names', () => {
+  // Uniqueness is a property of the whole set, so it is collected across the
+  // pool first: two providers sharing an env name means one credential silently
+  // authenticates as the other, and `resolveProviderKey` would hand the wrong
+  // key to whichever provider asks first — with no error anywhere.
+  const ownersOf = new Map()
+  for (const provider of BUILTIN_PROVIDERS) {
+    const owners = ownersOf.get(provider.apiKeyEnv) ?? []
+    owners.push(provider.id)
+    ownersOf.set(provider.apiKeyEnv, owners)
+  }
+  for (const id of V07_PROVIDER_IDS) {
+    const provider = providerById(id)
+    assert.ok(provider !== undefined, `${id} is a v0.7 provider and must be in the catalog`)
+    assert.equal(provider.enabled, false, `${id} must stay off until a real key verifies it`)
+    assert.deepEqual(
+      ownersOf.get(provider.apiKeyEnv),
+      [id],
+      `${id} apiKeyEnv ${provider.apiKeyEnv} must be declared by ${id} alone`,
+    )
+  }
+})
+
+for (const id of V07_PROVIDER_IDS) {
+  test(`v0.7 provider ${id} ships an https endpoint with a healthy model catalog`, () => {
+    const provider = providerById(id)
+    assert.ok(provider !== undefined, `${id} must be in the catalog`)
+    assert.match(provider.baseURL, /^https:\/\//, `${id} needs an https baseURL, got ${provider.baseURL}`)
+    assert.ok(Array.isArray(provider.models) && provider.models.length > 0, `${id} must declare at least one model`)
+    for (const entry of provider.models) {
+      const contextWindow = entry.caps.contextWindow
+      // `> 0` is also asserted pool-wide; the strict *integer* half is asserted
+      // only here, and it is the half that matters: the context gate compares
+      // this number to size a session, so a fractional or string value would
+      // compare wrongly, exclude the wrong candidate and never throw.
+      assert.ok(
+        Number.isInteger(contextWindow) && contextWindow > 0,
+        `${id}/${entry.id} needs a positive integer contextWindow, got ${JSON.stringify(contextWindow)}`,
+      )
+    }
+  })
+}
+
 test('listProviderModels flattens the enabled pool into provider/model pairs', () => {
   const pairs = listProviderModels({})
   assert.ok(pairs.length >= 15)

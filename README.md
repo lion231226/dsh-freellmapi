@@ -1,8 +1,9 @@
 # dsh-freellmapi
 
 **Free-tier multi-provider routing for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).**
-A dozen free provider pools behind one DSH provider route, with a per-request complexity classifier,
-capability/speed ranking, and automatic 429/5xx failover.
+Eighteen provider entries behind one DSH provider route — five of them enabled by default, and all five of
+those with a free tier — plus a per-request complexity classifier, capability/speed ranking, and automatic
+429/5xx failover.
 
 ```text
 install the plugin  →  start DSH  →  pick provider "freellmapi" + model "auto"  →  it answers
@@ -50,7 +51,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.6.3   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.7.0   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -87,7 +88,7 @@ so a correctly installed bundle needs no hand-written patch row. **Never add a s
 | | |
 |---|---|
 | **Self-contained routing** | The plugin owns the routing intelligence. `direct` mode (the default) needs no gateway, no daemon, no Docker — nothing but DSH itself. |
-| **A built-in pool of 12 providers / 30 models** | Groq, Cerebras, OpenRouter, GitHub Models, Mistral, Z.ai (Zhipu), Volcengine Ark, LongCat, LLM7, Kilo, NVIDIA NIM and OVH AI Endpoints — with per-model capability, speed, context window, vision and tool-calling facts. |
+| **A built-in pool of 18 providers / 45 models** | Groq, Cerebras, OpenRouter, GitHub Models, Mistral, Z.ai (Zhipu), Volcengine Ark, LongCat, LLM7, Kilo, NVIDIA NIM and OVH AI Endpoints, plus the six 0.7.0 additions — ModelScope (魔搭), iFlytek Spark (讯飞星火), SiliconFlow (硅基流动), SambaNova, HuggingFace Router and Routeway — with per-model capability, speed, context window, vision and tool-calling facts. **Only five of the eighteen are enabled out of the box.** |
 | **Per-request complexity routing** | Every request is scored and classified `simple` / `medium` / `complex`; the tier decides whether capability or speed dominates the ranking. A one-line "list the files here" and a 12-tool refactoring task do not go to the same model. |
 | **Automatic failover** | A rate-limited (429), broken (5xx), timed-out or `model_unavailable` candidate is parked and the next-ranked one is tried — **only before the first chunk has been sent**, so a single answer is never spliced from two models. |
 | **Health tracking and cooldowns** | The **first retryable failure already parks** the candidate (2 minutes), and each further consecutive failure escalates one step: 2 m → 10 m → 1 h → 24 h. `Retry-After` from the provider always wins; a rejected credential (401/403) parks that provider for 24 h. The scoring penalty decays with a 60-second half-life, so a single 429 is never a life sentence. |
@@ -165,7 +166,9 @@ convention `<PROVIDER_ID>_API_KEY`. Empty values count as "not configured".
 > The card offers a key field for the pool's **default-enabled** providers (`groq`, `cerebras`,
 > `openrouter`, `llm7`, `kilo`). The browser table is generated at build time from those defaults, so a
 > provider you enable yourself through `providers.<id>.enabled` will **not** grow a key row — set its
-> `apiKeyEnv` and store the credential directly in that case.
+> `apiKeyEnv` and store the credential directly in that case. That applies to all six providers added in
+> 0.7.0, which ship disabled on purpose: enabling one of them does **not** make a key row appear in the
+> card (this is the known gap recorded in the 0.6.1 changelog, not a bug).
 
 ### Which providers are actually reachable — and how to ask
 
@@ -192,14 +195,36 @@ how the wrong table got written.
 - Treat `403` as **ambiguous**: it needs a second probe with the other method before it means anything.
 - `404`/`400`/`422` usually mean the path differs, not that the host is down.
 
-The gate automates exactly this: `node tools/gate.mjs --online` → **G7** probes every pool provider with the
-method that suits it and prints the method beside each result, so the verdict can be audited rather than
-trusted.
+**The request body is part of the method too.** Probing a chat endpoint with a **model id that does not
+exist** yields the *opposite* conclusion: `modelscope` answers `400 Invalid model id` and `sambanova`
+answers `404 model_not_found`, and neither can be told apart from "this provider's chat needs no
+credential" — the request never reached the credential check. Replaying the same request with a **real id
+from the catalog** returned `401` from both. Same URL, same headers, different body, opposite verdict.
 
-Measured this way on 2026-10-15, **all 12 pool providers were reachable** — 0 unreachable, including the two
-the old table called blocked. And when a provider genuinely is unreachable from your network, turning it off
-is the whole change, in `$DSH_HOME/profiles/<profile>/cordis.patch.yml` (or the plugin's own `providers`
-field):
+The gate automates the header split: `node tools/gate.mjs --online` → **G7** probes every pool provider with
+the method that suits it and prints the method beside each result, so the verdict can be audited rather than
+trusted. G7 asks `GET {baseURL}/models` only, so read its green as *"the host answers"*, not as *"this
+provider will serve you a completion once you add a key"*.
+
+Measured this way on 2026-10-15:
+
+- **All 12 pre-0.7 pool providers answer** (G7, 2026-10-15) — including the two the old table called blocked.
+- **The six 0.7.0 additions**, probed anonymously *and* with a bogus header: `modelscope`, `xfyun`,
+  `siliconflow`, `sambanova` and `huggingface` are reachable. **`routeway`'s anonymous chat path is the one
+  open `AMBIGUOUS`**: without a credential its `POST /chat/completions` gets a Cloudflare interstitial
+  (`403`, HTML, "Attention Required"), while the same request **with** a bogus `Authorization` header
+  reaches the origin and gets a plain-JSON `401 Invalid API key`. A single response cannot separate
+  *anonymous rejected* from *region rejected*; a real key, or a second egress IP, would settle it. Nothing
+  in this README depends on that path being open.
+
+**Where these probes ran from is part of the result.** They were made from a **direct connection with no
+proxy configured** (all six proxy environment variables empty) whose egress is **US-Los Angeles**, not
+mainland China. So none of this claims that a **domestic direct connection** behaves the same — least of all
+for `modelscope` / `xfyun` / `siliconflow`. The application-layer verdicts (`401`, RFC 6750 credential
+challenges, origin error JSON) do not depend on the egress; *"reachable from your network"* does.
+
+And when a provider genuinely is unreachable from your network, turning it off is the whole change, in
+`$DSH_HOME/profiles/<profile>/cordis.patch.yml` (or the plugin's own `providers` field):
 
 ```yaml
 - id: freellmapi
@@ -208,11 +233,15 @@ field):
       someprovider: { enabled: false }
 ```
 
-Key request pages (verified reachable on 2026-10-14):
+Key request pages (the first seven were verified reachable on 2026-10-14):
 `groq` <https://console.groq.com/keys>, `cerebras` <https://cloud.cerebras.ai/>,
 `openrouter` <https://openrouter.ai/keys>, `mistral` <https://console.mistral.ai/api-keys>,
 `zhipu` <https://open.bigmodel.cn/usercenter/apikeys>, `volcengine` <https://console.volcengine.com/ark>,
 `longcat` <https://longcat.chat/platform/api_keys>.
+**The six 0.7.0 additions' key pages below are the pool's own `keyURL` values and were *not* independently
+verified** — only `modelscope`'s carries an upstream citation, and the maintainer measured (2026-10-15) that
+`www.xfyun.cn` and comparable Chinese vendor/documentation sites resolve to non-public addresses from the
+machine used for the probes.
 
 | Provider | `apiKeyEnv` | Key page | Free tier (upstream baseline) | Default | Notes |
 |---|---|---|---|---|---|
@@ -228,6 +257,35 @@ Key request pages (verified reachable on 2026-10-14):
 | `longcat` | `LONGCAT_API_KEY` | — | — | ⬜ off · ⚠️ **speculative** | No real-name requirement; model id inferred, not verified |
 | `nvidia` | `NVIDIA_API_KEY` | — | 40 RPM | ⬜ off | High capability ceiling (`qwen/qwen3-coder-480b-a35b-instruct`), but "evaluation only" trial ToS, first token can take minutes, and see the known gap in [Limitations](#limitations-and-unverified-claims) |
 | `ovh` | `OVH_AI_ENDPOINTS_KEY` | — | 2 RPM | ⬜ off | **Keyless works**, but 2 RPM only |
+| `modelscope` | `MODELSCOPE_API_KEY` | <https://modelscope.cn/my/myaccesstoken> | Upstream wrote 2 000 req/day, then marked that figure historical (billing moved to magic grains 魔粒) | ⬜ off | Alibaba's ModelScope (魔搭). **A token only serves traffic once the account is bound to an Alibaba Cloud China-site account with Chinese real-name verification** — unbound tokens answer `401 please bind your alibaba cloud account before use` on every call. Its `GET /models` answers `200` for *any* credential, so it cannot validate a key; use a 1-token chat instead |
+| `xfyun` | `XFYUN_API_KEY` | <https://console.xfyun.cn/> | No published token/QPS ceiling — upstream sets `null` rather than guessing | ⬜ off · ⚠️ **speculative** | iFlytek Spark (讯飞星火). **Chinese real-name verification required.** Auth is the console *APIPassword* as a bearer token. The model id `lite` is a **specification placeholder, not verified**: upstream says only "the Lite model is the free one" and its catalog needs a real key |
+| `siliconflow` | `SILICONFLOW_API_KEY` | <https://cloud.siliconflow.com/account/ak> | **No recurring free chat tier** — the `.com` endpoint is a one-time $1 trial credit | ⬜ off · ⚠️ **speculative** | SiliconFlow (硅基流动). **Chinese real-name verification required.** Upstream keeps the platform for its **free generative-media** models (image/TTS), which this plugin's LLM seam cannot consume; the chat model it once listed is **paid** ($0.06/M) and upstream deleted that row |
+| `sambanova` | `SAMBANOVA_API_KEY` | <https://cloud.sambanova.ai/apis> | **None — the free tier was permanently retired.** With a valid key, chat answers `402 payment method required` | ⬜ off · ⚠️ **speculative** | **Listed for the record, not as a free tier.** Upstream dropped it in V23 for exactly that reason. Its `baseURL` is **not** transcribed from upstream (zero matches there) but taken from vendor documentation, and its `/models` still answers `200` — which upstream itself records as a billing-gate false positive |
+| `huggingface` | `HUGGINGFACE_API_KEY` | <https://huggingface.co/settings/tokens> | Recurring **$0.10/mo** router credit, no card required (upstream: ~1–3M tokens/month on a 70B) | ⬜ off | The Inference Providers router. Free-ness there is an **account credit, not a catalog flag**: of the 296 provider rows in its catalog, **0** report `is_free: true`. `contextWindow` differs per backend for the same id |
+| `routeway` | `ROUTEWAY_API_KEY` | <https://routeway.ai/> | Docs say 20 RPM / 200 RPD; an upstream live test saw a stricter 5 RPM — upstream contradicts itself, so every limit is `null` | ⬜ off · ⚠️ **speculative** | An aggregator with `:free` routes. **Its anonymous chat path is an open `AMBIGUOUS`** (see above); a `User-Agent` disguise is *not* what unlocks it — the `Authorization` header is |
+
+> **Read those six rows as "catalogued", not as "free and working".** All six ship **disabled**
+> (`enabled: false`), each needs a key you supply yourself, and **none of them is part of the "install and it
+> works" default set** — that set is `groq`, `cerebras`, `openrouter`, `llm7`, `kilo`, unchanged in 0.7.0.
+> What the free-tier column actually means:
+>
+> - **`huggingface` and `routeway` are the only two with reusable free *chat* quota evidence**, and in both
+>   cases it is upstream's own statement (a recurring $0.10/mo router credit; `:free` routes cost $0).
+>   Neither has been verified here with a real key.
+> - **`sambanova` has no free tier left.** It is in the pool so that the entry is on record, not so that you
+>   can use it for free.
+> - **`siliconflow`'s free half is the half this plugin cannot use** — the free models are generative media,
+>   the chat model is paid. `modelscope` and `xfyun` publish no limits, so their free quota **cannot be
+>   verified without a credential**; do not read `enabled: true` on those two as a promise of free capacity.
+> - **`xfyun` and `siliconflow` require Chinese real-name verification** before a key serves traffic, and
+>   `modelscope` additionally needs the Alibaba-Cloud-China-site binding. That is a real barrier to the
+>   "zero config" story, and it is why these rows are labelled rather than enabled.
+> - ⚠️ **speculative** marks the entries whose pool `confidence` is `speculative`: the transcription is
+>   best-effort and can be wrong — `xfyun`'s model id above all. Enabling one is you accepting that.
+> - **The key rows in the settings card will not grow for any of these six** while they stay disabled. That
+>   is expected: the browser table is generated at build time from `enabled === true` entries only (see
+>   [Adding keys](#adding-keys) and the 0.6.1 note in the changelog). Enable one and set its `apiKeyEnv`
+>   yourself, or paste the key in the plugin's own settings page.
 
 > **`apiKeyEnv` is this plugin's own convention, not an upstream fact.** freellmapi has no such concept —
 > its keys live behind its dashboard in an encrypted store. Every name above is a *default* that you can
@@ -264,7 +322,7 @@ The picker is built from three groups, in this order:
    It replaces that provider's model rows, because those rows would only end in
    `MISSING_CREDENTIAL` if you picked one.
 
-A provider that is **disabled** (`enabled: false`, which includes seven of the twelve by default)
+A provider that is **disabled** (`enabled: false`, which includes thirteen of the eighteen by default)
 contributes nothing at all, so its models never appear.
 
 `setup:` entries are **not models**. Selecting one sends no request — it is a signpost whose name carries
@@ -571,7 +629,7 @@ explicit setting always wins over the environment.
 
 | Key | Meaning |
 |---|---|
-| `enabled` | Turn a provider on/off. This is how you enable the seven providers that ship disabled |
+| `enabled` | Turn a provider on/off. This is how you enable the thirteen providers that ship disabled |
 | `displayName` | Label used in the picker and logs |
 | `baseURL` | Endpoint root — fix a hostname without waiting for a release (see `zhipu`) |
 | `apiKeyEnv` | Your own credential reference name for this provider |
@@ -697,7 +755,7 @@ keep working on a machine where nothing is configured.
      ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐
      │ groq       │  │ cerebras   │  │ openrouter │  │ kilo       │  │ llm7       │
      └────────────┘  └────────────┘  └────────────┘  └────────────┘  └────────────┘
-   kilo and llm7 answer without any key at all      ·      12 pools in total
+   kilo and llm7 answer without any key at all      ·      18 pools in total
 ```
 
 Notes on the seams:
@@ -757,8 +815,9 @@ variable in its name and reopen the picker. See
 Missing key ⇒ silently dropped from the routing candidates, no warning (the picker shows it as a
 `setup:<provider>` signpost instead). Also check:
 
-- `enabled` — seven providers ship **disabled** (`github`, `mistral`, `zhipu`, `volcengine`, `longcat`,
-  `nvidia`, `ovh`); turn them on in `providers.<id>.enabled`.
+- `enabled` — thirteen providers ship **disabled**: `github`, `mistral`, `zhipu`, `volcengine`, `longcat`,
+  `nvidia`, `ovh`, plus the six 0.7.0 additions (`modelscope`, `xfyun`, `siliconflow`, `sambanova`,
+  `huggingface`, `routeway`); turn them on in `providers.<id>.enabled`.
 - Hard gates — a model without `vision: true` is excluded from image requests, `toolCalling: false` from
   tool requests, and anything whose `contextWindow` is smaller than the estimated prompt size.
 - Cooldowns — a recently failed candidate is parked; the `exclusions` list in the routing record says so
@@ -812,8 +871,8 @@ model. The message names the exact environment variable and where to get a free 
 The id you asked for is not served by any provider in the pool. The message lists the three closest ids
 and tells you when the provider prefix you used is merely disabled. Common causes: a typo, an id copied
 from a provider's own docs that is not in this pool, or a model of a provider that ships disabled
-(`github`, `mistral`, `zhipu`, `volcengine`, `longcat`, `nvidia`, `ovh`) — enable it under
-`config.providers.<id>` first. Use `auto` if you just want an answer.
+(`github`, `mistral`, `zhipu`, `volcengine`, `longcat`, `nvidia`, `ovh`, plus the six 0.7.0 additions) —
+enable it under `config.providers.<id>` first. Use `auto` if you just want an answer.
 
 A pinned model that exists but is cooling down reports `MODEL_UNAVAILABLE` instead, with the exclusion
 reason for each candidate; `auto` or waiting out the cooldown both work.
@@ -829,11 +888,15 @@ Stated plainly, so you know what you are relying on:
 2. **No end-to-end run against real providers.** Every test in this repository runs against in-process
    mock providers, deliberately, so CI stays offline. The only *real* external calls ever made were the
    maintainer's keyless probe (five requests, four 200s and one 404 documented in
-   `_lead/live-probe-2026-10-13.md`). Everything else — every keyed provider, every quota number, every
-   model id except the keyless ones — is **documentation-level evidence**, not measurement.
-3. **Only the keyless providers were measured at all.** `groq`, `cerebras`, `openrouter`, `github`,
-   `mistral`, `nvidia` and the rest were never contacted (no keys), so their `baseURL`s and model ids come
-   from upstream's registry and migrations. Rate-limit numbers are the 2026-04 baseline and will drift.
+   `_lead/live-probe-2026-10-13.md`) plus the credential-free reachability and catalog probes behind the
+   reachability section above (`_lead/research/reachability-v0.7.md`, 2026-10-15). **No completion has ever
+   been requested with a real key**, so everything else — every keyed provider, every quota number, every
+   model id except the ones a public catalog publishes — is **documentation-level evidence**, not
+   measurement.
+3. **Only credential-free requests were ever made.** `groq`, `cerebras`, `openrouter`, `github`, `mistral`,
+   `nvidia` and the rest were contacted without credentials (status codes and public catalogs only, never a
+   completion), so their `baseURL`s and model ids come from upstream's registry and migrations. Rate-limit
+   numbers are the 2026-04 baseline and will drift.
 4. **`zhipu` is the riskiest entry in the pool**, and `volcengine` / `longcat` model ids are inferred —
    all three ship **disabled** with `confidence: 'speculative'`. Enabling them is you accepting that risk.
    The `zhipu` hostname in particular differs between the mainland and overseas sites and the keys do not
@@ -885,11 +948,16 @@ kilo's own `GET /api/gateway/models`:
 | `kilo/poolside/laguna-s-2.1:free` | 131 072 | **262 144** |
 | `kilo/cohere/north-mini-code:free` | 131 072 | **256 000** |
 
-**Every other context window in the pool is still a catalog estimate, not a measurement.** Those providers'
+**Every other context window in the pool is either a catalog reading or an estimate.** Those providers'
 `GET /v1/models` answers `403` without a credential, and OVH's endpoint — although it answers `200` — does
 not publish a context field at all. The `source` note on each entry in `lib/providers.js` says where its
-number came from and when; treat anything that does not say "measured" as an estimate. `llm7`'s two models
-are the only other measured rows (their endpoint publishes `context_window.tokens`).
+number came from and when; treat anything that does not say "measured" as an estimate. Measured rows
+include `llm7`'s two (`context_window.tokens`), `sambanova`'s four and `routeway`'s four
+(`context_length`, both catalogs fetched anonymously on 2026-10-15 — two `routeway` `:free` routes declare
+**42 000**, not the 62 000 the rest of its `:free` family declares), and `huggingface`'s two, whose number is
+the **selected backend's** `context_length` and deliberately not the largest one on offer. The six 0.7.0
+additions that ship disabled are otherwise conservative defaults: `modelscope`'s catalog publishes no
+context field at all, and `xfyun`'s and `siliconflow`'s catalogs need a credential nobody here has.
 
 If a provider in your install reports a different window, override it per model — no code change needed:
 
@@ -912,7 +980,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.6.3` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.0` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package

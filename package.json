@@ -1,7 +1,7 @@
 {
   "name": "dsh-freellmapi",
-  "version": "0.6.3",
-  "description": "Self-contained free-tier LLM routing for DeepSeek Harness: one `auto` model that scores each request's complexity and picks the best of 12 free providers, failing over automatically. Unconfigured providers collapse to a single 'add your key' entry instead of dead models, and pinning a specific model is strict -- never silently swapped. Works with zero credentials out of the box.",
+  "version": "0.7.0",
+  "description": "Self-contained free-tier LLM routing for DeepSeek Harness: one `auto` model that scores each request's complexity and picks the best of 18 catalogued providers -- five enabled by default -- failing over automatically. Unconfigured providers collapse to a single 'add your key' entry instead of dead models, and pinning a specific model is strict -- never silently swapped. Works with zero credentials out of the box.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
