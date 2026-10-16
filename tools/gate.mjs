@@ -246,6 +246,19 @@ const verdictOf = (row) => {
   return `HTTP ${row.status}`
 }
 
+/** Verdict plus a human-readable note about *how* it was reached. */
+const verdictWithMethod = (row) => {
+  const verdict = verdictOf(row)
+  if (row.error !== undefined) return { verdict, note: `transport error: ${row.error}` }
+  if (row.status === 401) return { verdict, note: `credential rejected (HTTP 401, ${row.method})` }
+  if (row.status === 403) return { verdict, note: `${row.method === 'anonymous' ? 'anonymous rejected' : 'credential rejected'} (HTTP 403)` }
+  if (row.status === 404 || row.status === 400 || row.status === 422) return { verdict, note: `different path (HTTP ${row.status})` }
+  if (row.status === 429) return { verdict, note: `rate limited (HTTP 429)` }
+  return { verdict, note: `HTTP ${row.status}` }
+}
+
+let g7Rows = []
+
 if (ONLINE) {
   const { providerDeclarations } = await import(moduleUrl('lib/providers.js'))
   const declarations = providerDeclarations({})
@@ -257,9 +270,15 @@ if (ONLINE) {
   // network is not a defect in the plugin, and treating it as one would make the
   // gate fail on a train. The gate records the measurement; a human decides.
   const unreachable = rows.filter((r) => verdictOf(r) === 'UNREACHABLE')
+  // Share probe results between G7 and G10 so the same provider cannot be
+  // reported as reachable by one and transport-error by the other (E13). Any
+  // inconsistency between the two gates' verdicts for one provider is called out
+  // explicitly instead of being silently mixed.
+  const g7Rows = rows.map((r) => ({ ...r, verdict: verdictWithMethod(r) }))
   record('G7', 'pool reachability (informational, method-aware probes)', true,
     `${rows.length} probed, ${unreachable.length} unreachable${unreachable.length > 0 ? `: ${unreachable.map((r) => r.provider).join(', ')}` : ''}`)
-  results[results.length - 1].rows = rows
+  results[results.length - 1].rows = g7Rows
+  results[results.length - 1].verdicts = Object.fromEntries(g7Rows.map((r) => [r.provider, r.verdict.verdict]))
 }
 
 // ---------------------------------------------------------------------------
@@ -271,14 +290,20 @@ if (ONLINE) {
     const { providerDeclarations } = await import(moduleUrl('lib/providers.js'))
     const rows = []
     for (const d of providerDeclarations({})) {
-      // Only a provider whose catalogue is readable WITHOUT a credential can be
-      // checked id-by-id here. A keyed provider answers 401 to this probe, and
-      // "401" is not evidence that an id is missing — so it is recorded as
-      // unchecked rather than silently passed. This is the honest half of the
-      // check; the other half needs a real credential.
-      const result = await probe(d.id, d.baseURL, d.keyless === true)
+      // Reuse the shared probe result from G7 so one provider is never probed
+      // twice with different outcomes (E13). A keyed provider answers 401 to this
+      // probe, and "401" is not evidence that an id is missing — so it is
+      // recorded as unchecked rather than silently passed. This is the honest
+      // half of the check; the other half needs a real credential.
+      const shared = g7Rows.find((r) => r.provider === d.id)
+      const result = { ...shared }
       if (result.status !== 200) {
-        rows.push({ provider: d.id, checked: false, reason: `catalogue not readable anonymously (HTTP ${result.status ?? result.error})` })
+        rows.push({
+          provider: d.id,
+          checked: false,
+          reason: `catalogue not readable anonymously (${result.error ? `transport error: ${result.error}` : `HTTP ${result.status ?? 'unknown'}`})`,
+          method: result.method,
+        })
         continue
       }
       let served = null
@@ -318,6 +343,11 @@ if (ONLINE) {
   // replacements against (its catalogue serves no qwen at all and its newest llama
   // is 3.1), so it is recorded as work rather than papered over.
   const latentDead = checked.filter((r) => r.missing.length > 0 && r.enabled !== true)
+  // Coverage gap: default-enabled providers that could not be id-checked because
+  // no credential is available. Not blocking when credential-free (a red nobody
+  // can act on is noise), but must never be read as "verified".
+  const defaultEnabled = Object.freeze(['groq', 'cerebras', 'openrouter', 'kilo', 'llm7'])
+  const coverageGap = defaultEnabled.filter((id) => !checked.some((r) => r.provider === id))
 
   assert(
     liveDead.length === 0,
@@ -326,11 +356,16 @@ if (ONLINE) {
   const latentNote = latentDead.length === 0
     ? ''
     : `; ${latentDead.length} disabled provider(s) carry dead ids (latent until enabled): ${latentDead.map((r) => `${r.provider}: ${r.missing.join(', ')}`).join('; ')}`
+  const gapNote = coverageGap.length === 0
+    ? ''
+    : `; ${coverageGap.length} default-enabled provider(s) not id-checked (no credential): ${coverageGap.join(', ')}`
   record('G10', 'declared model ids are served (method: compare each id against GET /models; credential-free catalogues only)', true,
     `${checked.length} catalogue(s) checked, ${liveDead.length} enabled with dead ids`
     + `${unchecked.length === 0 ? '' : `; ${unchecked.length} unchecked anonymously (${unchecked.map((r) => r.provider).join(', ')})`}`
+    + gapNote
     + latentNote)
   results[results.length - 1].rows = coverage
+  results[results.length - 1].coverageGap = coverageGap
 }
 
 // ---------------------------------------------------------------------------
