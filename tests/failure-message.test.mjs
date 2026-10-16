@@ -26,7 +26,6 @@ import { describeTransportFailure, describeUnknown } from '../lib/errors.js'
 import { assertValidChunkSequence, collect } from './helpers/harness.mjs'
 import { mountPlugin } from './helpers/context.mjs'
 import { startMockPool } from './helpers/pool.mjs'
-
 const USELESS = /\[object Object\]/
 
 // ---------------------------------------------------------------- the helper
@@ -65,6 +64,40 @@ test('★ describeUnknown survives a value that cannot be serialised', () => {
   const out = describeUnknown(circular, 'FALLBACK')
   assert.equal(out, 'FALLBACK')
   assert.doesNotMatch(out, USELESS)
+})
+
+// ---------------------------------------------------------------- AUTH branch
+//
+// direct mode has no gateway: a 401 must name the provider + baseURL that
+// rejected the credential, and must not mislead the user into setting the
+// FreeLLMAPI gateway's unified key.
+
+test('★ direct-mode AUTH failure names provider + baseURL, never "the gateway"', async (t) => {
+  const pool = await startMockPool([{
+    id: 'groq',
+    models: [{ id: 'groq/model', contextWindow: 131_072 }],
+    respond: ({ response }) => {
+      response.writeHead(401, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: { message: 'Invalid API Key', code: 401 } }))
+      return true
+    },
+  }])
+  const mounted = mountPlugin({
+    config: {
+      mode: 'direct',
+      providers: pool.config,
+    },
+  })
+  t.after(async () => { await mounted.close?.(); await pool.close() })
+
+  const message = await failureMessageOf(mounted.adapter, {
+    provider: 'freellmapi',
+    model: 'groq/model',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+  })
+  assert.ok(message.includes('groq'), `AUTH message must name provider: ${message}`)
+  assert.ok(message.includes(' at http://') || message.includes('<unknown>'), `AUTH message must name baseURL: ${message}`)
+  assert.doesNotMatch(message, /the gateway|gateway/, `direct-mode AUTH must not say "gateway": ${message}`)
 })
 
 test('★ describeTransportFailure describes a non-string error.message', () => {
