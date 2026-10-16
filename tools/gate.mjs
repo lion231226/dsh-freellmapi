@@ -346,6 +346,7 @@ if (ONLINE) {
   // Coverage gap: default-enabled providers that could not be id-checked because
   // no credential is available. Not blocking when credential-free (a red nobody
   // can act on is noise), but must never be read as "verified".
+  const declarations = providerDeclarations({})
   const defaultEnabled = Object.freeze(['groq', 'cerebras', 'openrouter', 'kilo', 'llm7'])
   const coverageGap = defaultEnabled.filter((id) => !checked.some((r) => r.provider === id))
 
@@ -359,13 +360,31 @@ if (ONLINE) {
   const gapNote = coverageGap.length === 0
     ? ''
     : `; ${coverageGap.length} default-enabled provider(s) not id-checked (no credential): ${coverageGap.join(', ')}`
+  // Vision coverage: how many default-enabled rows declare vision, and how many
+  // are keyless AND reachable (informational only — does not gate PASS/FAIL).
+  const visionRows = []
+  let visionDeclared = 0
+  let keylessReachableVision = 0
+  for (const d of declarations) {
+    if (!defaultEnabled.includes(d.id)) continue
+    for (const model of d.models ?? []) {
+      if ((model.caps ?? {}).vision === true) {
+        visionDeclared += 1
+        visionRows.push(`${d.id}/${model.id}`)
+        if (d.keyless === true) keylessReachableVision += 1
+      }
+    }
+  }
+  const visionNote = `vision coverage: ${visionDeclared} default-enabled row(s) declare vision; keyless reachable vision rows: ${keylessReachableVision}`
   record('G10', 'declared model ids are served (method: compare each id against GET /models; credential-free catalogues only)', true,
     `${checked.length} catalogue(s) checked, ${liveDead.length} enabled with dead ids`
     + `${unchecked.length === 0 ? '' : `; ${unchecked.length} unchecked anonymously (${unchecked.map((r) => r.provider).join(', ')})`}`
     + gapNote
+    + `; ${visionNote}`
     + latentNote)
   results[results.length - 1].rows = coverage
   results[results.length - 1].coverageGap = coverageGap
+  results[results.length - 1].visionRows = visionRows
 }
 
 // ---------------------------------------------------------------------------
