@@ -60,8 +60,12 @@ test('★ with forwarding off, nothing is declared anywhere', async () => {
 
 test('★ with forwarding on, only the measured CONCRETE model declares', async () => {
   const declared = await reasoningOf({ forwardReasoningEffort: true }, MEASURED_MODEL)
-  assert.deepEqual(declared?.efforts, MEASURED_EFFORTS.map((id) => ({ id })),
+  assert.deepEqual(declared?.efforts, MEASURED_EFFORTS.map((id) => ({ id, name: id })),
     'the measured vocabulary should be declared verbatim, one entry per accepted value')
+  for (const entry of declared?.efforts ?? []) {
+    assert.ok(typeof entry.name === 'string' && entry.name.length > 0,
+      `each declared effort must carry a non-empty name, got ${JSON.stringify(entry)}`)
+  }
 
   // The two negatives that matter. `auto` because a pool intersection is nobody's
   // vocabulary; an unmeasured model because the absence of a measurement is not a
