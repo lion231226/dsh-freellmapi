@@ -5,6 +5,69 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.18] - 2026-10-20
+
+**The gate was crashing, then it was lying — both found by the weekly pool check failing.**
+
+### Fixed
+
+- **G10 was inert and still reported a pass.** `tools/gate.mjs` declared `let g7Rows = []` at
+  module scope, then re-declared `const g7Rows = …` inside the G7 block. The inner binding
+  shadowed the outer one, so the reuse in G10 looked up a list that was **always empty**: every
+  provider was recorded as *"catalogue not readable (HTTP unknown)"*, zero catalogues were checked,
+  and G10 went green. That is an assertion whose subject was empty — the shape this project already
+  paid for once (L22).
+
+  After removing the shadowing, G10 checks **9 catalogues** again (`openrouter` 470 served / 7
+  declared, `kilo` 401 / 4, `llm7` 67 / 2, `routeway` 293 / 4, …) and its `unchecked` reasons are
+  honest instead of uniform: 7 providers answer `401` without a credential, and `longcat` answers
+  `200` with **no recognisable model list**.
+
+  **A plumbing assertion now guards the class**: every provider in `coverage` must find a G7 probe
+  result, otherwise the gate goes red with *"the shared-probe reuse is broken"*. It is scoped to
+  *"the lookup found nothing"* rather than *"unchecked"* on purpose — `longcat`'s 200-with-no-list is
+  legitimate behaviour and must not red-light.
+
+- **The gate's whole online section crashed** with `ReferenceError: providerDeclarations is not
+  defined`. The import was destructured inside G10's IIFE while the coverage-gap and vision summaries
+  lived outside it. Hoisted to the `if (ONLINE)` block scope. G7–G10 produced no results at all
+  before this; now they run.
+
+- **The `github` provider is removed from the pool.** Upstream **retired GitHub Models** and deleted
+  the platform in `cece2df2af` (`2026-10-17`, *"remove the retired GitHub Models provider"*). Our
+  pool still declared it, which G8 correctly reports as `extra` — a **real defect**, not a backlog
+  item. Traced commit-by-commit: it was present upstream as late as `08a7100d99` (2026-10-15, 72
+  members) and gone from `2c506ea999` (2026-10-18).
+
+  The two model rows go with it (`github/openai/gpt-5`, `github/openai/gpt-4.1`). The provider was
+  `enabled: false`, so **no routing behaviour changes**.
+
+  Note on verification: the service's endpoints still answer `HTTP 200` anonymously — but with a bare
+  `OK` body and no model list, so that 200 cannot be read as "still serving". Removing the rows is
+  driven by upstream's explicit *retired* designation, not by a failure we could measure.
+
+- **Two stale figures in the tests' own reasoning comments** were corrected rather than left to
+  become false premises: the smallest **confirmed** context window in the pool is now `32000`
+  (`mistral/codestral-latest`), not `8000` via the removed `github` row; and `contextWindow ===
+  maxTokens` parity now holds in **two** places (both `sambanova` rows), not three. Both comments say
+  what changed and why the argument is unaffected.
+
+- **Documentation counts corrected across both READMEs**: 17 providers / 46 models (was 18 / 45 —
+  the model figure had drifted by three before this change), twelve providers ship disabled (was
+  thirteen), and the `github` row is gone from the provider table and the four prose lists that
+  named it.
+
+### Notes on scope
+
+- **CI still does not run the gate at all** — `.github/workflows/ci.yml` runs `npm test` only. G1–G4
+  and G6 exist *only* in the gate, so nothing in CI covers them, and the online section (G7–G10) runs
+  solely in the weekly automation. That is why a crash and a silent coverage collapse both survived
+  undetected. Adding the offline gate to CI is cheap and safe; covering the online section needs a
+  separate scheduled workflow. **Recorded as work, not done here.**
+- The `nvidia` latent dead ids (`meta/llama-3.3-70b-instruct`,
+  `qwen/qwen3-coder-480b-a35b-instruct`) are unchanged: that provider is disabled by default, G10
+  reports them as latent, and fixing them needs an NVIDIA credential to measure replacements.
+
 ## [Unreleased]
 
 ### Added — `lib/telemetry.js`, NOT yet wired in

@@ -49,7 +49,7 @@
 
    ```text
    github:lion231226/dsh-freellmapi          # 直接从 GitHub 装（无需先发 npm）
-   github:lion231226/dsh-freellmapi#v0.7.17   # 钉到某个 tag
+   github:lion231226/dsh-freellmapi#v0.7.18   # 钉到某个 tag
    dsh-freellmapi                            # npm 包名（发布之后可用）
    ```
 
@@ -85,7 +85,7 @@
 | | |
 |---|---|
 | **自包含的路由** | 路由智能在插件里。默认的 `direct` 模式不需要网关、不需要常驻进程、不需要 Docker，只要有 DSH。 |
-| **内置 18 家 / 45 个模型的池子** | Groq、Cerebras、OpenRouter、GitHub Models、Mistral、Z.ai（智谱）、火山方舟、LongCat、LLM7、Kilo、NVIDIA NIM、OVH AI Endpoints，加上 0.7.0 新增的六家——魔搭（ModelScope）、讯飞星火（iFlytek Spark）、硅基流动（SiliconFlow）、SambaNova、HuggingFace Router、Routeway——每个模型都带能力、速度、上下文、视觉与工具调用的事实标注。**十八家里只有五家开箱启用。** |
+| **内置 17 家 / 46 个模型的池子** | Groq、Cerebras、OpenRouter、Mistral、Z.ai（智谱）、火山方舟、LongCat、LLM7、Kilo、NVIDIA NIM、OVH AI Endpoints，加上 0.7.0 新增的六家——魔搭（ModelScope）、讯飞星火（iFlytek Spark）、硅基流动（SiliconFlow）、SambaNova、HuggingFace Router、Routeway——每个模型都带能力、速度、上下文、视觉与工具调用的事实标注。**十七家里只有五家开箱启用。** |
 | **逐请求的复杂度路由** | 每个请求都被打分并分成 `simple` / `medium` / `complex` 三档；档位决定排序里"能力优先"还是"速度优先"。一句"列出目录里的文件"和一个带 12 个工具的重构任务，不会落到同一个模型上。 |
 | **自动故障转移** | 被限流（429）、报错（5xx）、超时或 `model_unavailable` 的候选会被"停车"，然后按排名试下一个——**且只允许在第一个 chunk 发出之前**换家，所以一条回答绝不会由两个模型拼接而成。 |
 | **健康度与冷却** | **首次可重试失败就已经停车**（2 分钟），之后每次连续失败升一级：2 分钟 → 10 分钟 → 1 小时 → 24 小时。provider 给的 `Retry-After` 永远优先；凭据被拒（401/403）则该家停车 24 小时。降权会按 60 秒半衰期衰减，所以一次 429 绝不会变成"无期徒刑"。 |
@@ -266,7 +266,6 @@ key 是性价比最高的一步：默认候选池是 `groq`、`cerebras`、`open
 | `openrouter` | `OPENROUTER_API_KEY` | <https://openrouter.ai/keys> | 20 RPM / 200 RPD | ✅ 开 | `complex` 档的主力（`nvidia/nemotron-3-ultra-550b-a55b:free`、`nemotron-3-super-120b-a12b:free`、`cohere/north-mini-code:free`） |
 | `llm7` | `LLM7_API_KEY` | <https://token.llm7.io/> | 约 100 请求/小时 | ✅ 开 | **免凭据可用**；有 key 只是抬高上限。申请页是文档级证据，未经独立复核 |
 | `kilo` | `KILO_API_KEY` | — | 约 200 请求/小时每 IP | ✅ 开 | **免凭据可用。** 免费流量会被记录用于训练 |
-| `github` | `GITHUB_MODELS_TOKEN` | — | 10 RPM / 50 RPD | ⬜ 关 | 有 `openai/gpt-5`，但限流极紧 |
 | `mistral` | `MISTRAL_API_KEY` | <https://console.mistral.ai/api-keys> | 500K TPM | ⬜ 关 | `mistral-large-latest`、`magistral-medium-latest`、`codestral-latest` |
 | `zhipu` | `ZHIPU_API_KEY` | — | 约 1M TPD | ⬜ 关 · ⚠️ **推测** | `glm-4.7-flash`、`glm-4.6v-flash`。**`baseURL` 是整个池子里风险最高的一项**：国内站与海外站的 key 不互通，主机名选错必然 401。只有你清楚自己的 key 属于哪个站时才开。 |
 | `volcengine` | `ARK_API_KEY` | — | 约 2M TPD | ⬜ 关 · ⚠️ **推测** | 国内 provider，需实名；模型 id 是推断的，未经实测 |
@@ -332,7 +331,7 @@ providers:
 3. **每个"已启用但拿不到凭据"的家，折叠成 1 条 `setup:<provider>` 引导项。** 它代替那家的模型行，
    因为那些行选中了也只会得到 `MISSING_CREDENTIAL`。
 
-被**关闭**的家（`enabled: false`，十八家里默认就有十三家）什么都不产出，它们的模型根本不会出现。
+被**关闭**的家（`enabled: false`，十七家里默认就有十二家）什么都不产出，它们的模型根本不会出现。
 
 `setup:` **不是模型**：选中它不会发起任何请求，它只是一块路牌，名字里带着确切的环境变量名和免费
 申请地址：
@@ -627,7 +626,7 @@ mode: gateway            # 默认是 "direct"；gateway 还需要 baseURL 与一
 
 | 键 | 含义 |
 |---|---|
-| `enabled` | 打开/关闭某家。默认关闭的十三家就是靠这个启用 |
+| `enabled` | 打开/关闭某家。默认关闭的十二家就是靠这个启用 |
 | `displayName` | 选择器与日志里的显示名 |
 | `baseURL` | 端点根地址——不用等发版就能修主机名（见 `zhipu`） |
 | `apiKeyEnv` | 你给这家起的凭据引用名 |
@@ -748,7 +747,7 @@ dsh-freellmapi: routed via groq/llama-3.3-70b (model=auto) fallback-attempts=2 t
      ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐
      │ groq       │  │ cerebras   │  │ openrouter │  │ kilo       │  │ llm7       │
      └────────────┘  └────────────┘  └────────────┘  └────────────┘  └────────────┘
-   kilo 与 llm7 不需要任何 key 就能答      ·      池子共 18 家
+   kilo 与 llm7 不需要任何 key 就能答      ·      池子共 17 家
 ```
 
 接口边界上的几点：
@@ -800,7 +799,7 @@ dsh-freellmapi: all 3 candidate(s) failed for tier=medium after 2 attempts — g
 
 缺 key ⇒ 静默移出路由候选，没有警告（列表里它会显示成 `setup:<provider>` 路牌）。另外检查：
 
-- `enabled`——有十三家是**默认关闭**的（`github`、`mistral`、`zhipu`、`volcengine`、`longcat`、
+- `enabled`——有十二家是**默认关闭**的（`mistral`、`zhipu`、`volcengine`、`longcat`、
   `nvidia`、`ovh`，加上 0.7.0 新增的 `modelscope`、`xfyun`、`siliconflow`、`sambanova`、`huggingface`、
   `routeway`），要在 `providers.<id>.enabled` 里打开。
 - 硬门槛——没有 `vision: true` 的模型会被带图请求排除，`toolCalling: false` 的会被带工具请求排除，
@@ -849,7 +848,7 @@ Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
 
 你要的 id 池子里没有任何一家提供。message 会列出最接近的三个 id，并告诉你所用的 provider 前缀是否只是
 被默认关闭了。常见原因：拼错；从某家自己的文档里抄来的、并不在本池里的 id；或者该家默认关闭
-（`github`、`mistral`、`zhipu`、`volcengine`、`longcat`、`nvidia`、`ovh`，加上 0.7.0 新增的六家）——
+（`mistral`、`zhipu`、`volcengine`、`longcat`、`nvidia`、`ovh`，加上 0.7.0 新增的六家）——
 先在 `config.providers.<id>` 里打开它。如果你只是想要一个答案，用 `auto`。
 
 钉住的模型存在、只是正在冷却时报的是 `MODEL_UNAVAILABLE`，并附上每个候选的排除原因；用 `auto` 或等
@@ -868,7 +867,7 @@ Get-ChildItem "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@deepseek-ai"
    （`_lead/research/reachability-v0.7.md`，2026-10-15）。**从未用真 key 请求过一次补全**，所以其余一切
    ——每一家有 key 的 provider、每一个额度数字、除公开目录发布之外的每一个模型 id——都是**文档级证据**，
    不是实测。
-3. **只发过免凭据请求。** `groq`、`cerebras`、`openrouter`、`github`、`mistral`、`nvidia` 等等都是在**不带
+3. **只发过免凭据请求。** `groq`、`cerebras`、`openrouter`、`mistral`、`nvidia` 等等都是在**不带
    凭据**的情况下被访问的（只取状态码与公开目录，从不请求补全），它们的 `baseURL` 与模型 id 来自上游
    registry 与迁移脚本。限流数字是 2026-04 的基线，会漂移。
 4. **`zhipu` 是池子里风险最高的一项**，`volcengine` / `longcat` 的模型 id 是推断的——这三家都以
@@ -941,7 +940,7 @@ providers:
 | DeepSeek Harness 运行时 | `0.2.0-rc.2`（针对它编写并核对） | 其它 `0.2.0-rc.x` 大概率可用；只用了稳定的 LLM seam API |
 | Node.js | `>= 22` | 与参考 DSH 插件的声明一致 |
 | Provider API | OpenAI 兼容的 `POST {baseURL}/chat/completions` + SSE | 池子里每一家说的都是同一种 wire |
-| `dsh-freellmapi` | `0.7.17` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.18` | 零运行时依赖；DSH 的 LLM 运行时在加载时解析；peer 为 `@deepseek-ai/schemastery`（配置 schema）与可选的 `@deepseek-ai/cordis` |
 | freellmapi 网关 | `v0.13.x` 协议面 | 仅在 `gateway` 模式下相关 |
 
 > 版本号提醒：上游网关的 release 是 `v0.13.x`，而提供 `setup-dsh` 的 npm CLI 包 `freellmapi` 是独立

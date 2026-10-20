@@ -109,14 +109,12 @@ test('no model claims vision without probe or code evidence', () => {
   }
   assert.deepEqual(vision.sort(), [
     'cerebras/llama-4-maverick-17b-128e-instruct',
-    'github/openai/gpt-4.1',
-    'github/openai/gpt-5',
     'openrouter/dots-studio/dots-3-note-preview:free',
     'openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
     'zhipu/glm-4.6v-flash',
   ])
   // The default-on pool still has at least one vision option.
-  const visionEnabled = vision.filter((id) => !id.startsWith('github/') && !id.startsWith('zhipu/'))
+  const visionEnabled = vision.filter((id) => !id.startsWith('zhipu/'))
   assert.ok(visionEnabled.length >= 1)
 })
 
@@ -198,7 +196,7 @@ test('listProviderModels flattens the enabled pool into provider/model pairs', (
     assert.equal(typeof pair.caps.capability, 'number')
   }
   const providers = new Set(pairs.map((pair) => pair.provider))
-  for (const disabled of ['github', 'mistral', 'zhipu', 'volcengine', 'longcat', 'nvidia', 'ovh']) {
+  for (const disabled of ['mistral', 'zhipu', 'volcengine', 'longcat', 'nvidia', 'ovh']) {
     assert.equal(providers.has(disabled), false, `${disabled} is disabled and must not be listed`)
   }
 })

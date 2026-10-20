@@ -52,7 +52,7 @@ contains keyless providers that the maintainer verified with real, credential-fr
 
    ```text
    github:lion231226/dsh-freellmapi          # from GitHub (no npm publish needed)
-   github:lion231226/dsh-freellmapi#v0.7.17   # pinned to a tag
+   github:lion231226/dsh-freellmapi#v0.7.18   # pinned to a tag
    dsh-freellmapi                            # from npm, once published
    ```
 
@@ -89,7 +89,7 @@ so a correctly installed bundle needs no hand-written patch row. **Never add a s
 | | |
 |---|---|
 | **Self-contained routing** | The plugin owns the routing intelligence. `direct` mode (the default) needs no gateway, no daemon, no Docker — nothing but DSH itself. |
-| **A built-in pool of 18 providers / 45 models** | Groq, Cerebras, OpenRouter, GitHub Models, Mistral, Z.ai (Zhipu), Volcengine Ark, LongCat, LLM7, Kilo, NVIDIA NIM and OVH AI Endpoints, plus the six 0.7.0 additions — ModelScope (魔搭), iFlytek Spark (讯飞星火), SiliconFlow (硅基流动), SambaNova, HuggingFace Router and Routeway — with per-model capability, speed, context window, vision and tool-calling facts. **Only five of the eighteen are enabled out of the box.** |
+| **A built-in pool of 17 providers / 46 models** | Groq, Cerebras, OpenRouter, Mistral, Z.ai (Zhipu), Volcengine Ark, LongCat, LLM7, Kilo, NVIDIA NIM and OVH AI Endpoints, plus the six 0.7.0 additions — ModelScope (魔搭), iFlytek Spark (讯飞星火), SiliconFlow (硅基流动), SambaNova, HuggingFace Router and Routeway — with per-model capability, speed, context window, vision and tool-calling facts. **Only five of the seventeen are enabled out of the box.** |
 | **Per-request complexity routing** | Every request is scored and classified `simple` / `medium` / `complex`; the tier decides whether capability or speed dominates the ranking. A one-line "list the files here" and a 12-tool refactoring task do not go to the same model. |
 | **Automatic failover** | A rate-limited (429), broken (5xx), timed-out or `model_unavailable` candidate is parked and the next-ranked one is tried — **only before the first chunk has been sent**, so a single answer is never spliced from two models. |
 | **Health tracking and cooldowns** | The **first retryable failure already parks** the candidate (2 minutes), and each further consecutive failure escalates one step: 2 m → 10 m → 1 h → 24 h. `Retry-After` from the provider always wins; a rejected credential (401/403) parks that provider for 24 h. The scoring penalty decays with a 60-second half-life, so a single 429 is never a life sentence. |
@@ -290,7 +290,6 @@ the reason previously given for that was wrong.)
 | `openrouter` | `OPENROUTER_API_KEY` | <https://openrouter.ai/keys> | 20 RPM / 200 RPD | ✅ on | The `complex` tier's main supplier (`nvidia/nemotron-3-ultra-550b-a55b:free`, `nemotron-3-super-120b-a12b:free`, `cohere/north-mini-code:free`) |
 | `llm7` | `LLM7_API_KEY` | <https://token.llm7.io/> | ~100 req/hour | ✅ on | **Keyless works**; a key raises the ceiling. Key page is reported, not independently verified |
 | `kilo` | `KILO_API_KEY` | — | ~200 req/hour per IP | ✅ on | **Keyless works.** Free traffic is logged for training |
-| `github` | `GITHUB_MODELS_TOKEN` | — | 10 RPM / 50 RPD | ⬜ off | Has `openai/gpt-5`; the rate limits are punishing |
 | `mistral` | `MISTRAL_API_KEY` | <https://console.mistral.ai/api-keys> | 500K TPM | ⬜ off | `mistral-large-latest`, `magistral-medium-latest`, `codestral-latest` |
 | `zhipu` | `ZHIPU_API_KEY` | — | ~1M TPD | ⬜ off · ⚠️ **speculative** | `glm-4.7-flash`, `glm-4.6v-flash`. **`baseURL` is the single riskiest row in the pool**: the mainland and overseas sites do not share keys, and picking the wrong hostname gives a guaranteed 401. Enable it only if you know which site your key belongs to. |
 | `volcengine` | `ARK_API_KEY` | — | ~2M TPD | ⬜ off · ⚠️ **speculative** | Chinese provider, real-name registration required; the model id is inferred, not verified |
@@ -364,7 +363,7 @@ The picker is built from three groups, in this order:
    It replaces that provider's model rows, because those rows would only end in
    `MISSING_CREDENTIAL` if you picked one.
 
-A provider that is **disabled** (`enabled: false`, which includes thirteen of the eighteen by default)
+A provider that is **disabled** (`enabled: false`, which includes twelve of the seventeen by default)
 contributes nothing at all, so its models never appear.
 
 `setup:` entries are **not models**. Selecting one sends no request — it is a signpost whose name carries
@@ -722,7 +721,7 @@ explicit setting always wins over the environment.
 
 | Key | Meaning |
 |---|---|
-| `enabled` | Turn a provider on/off. This is how you enable the thirteen providers that ship disabled |
+| `enabled` | Turn a provider on/off. This is how you enable the twelve providers that ship disabled |
 | `displayName` | Label used in the picker and logs |
 | `baseURL` | Endpoint root — fix a hostname without waiting for a release (see `zhipu`) |
 | `apiKeyEnv` | Your own credential reference name for this provider |
@@ -908,7 +907,7 @@ variable in its name and reopen the picker. See
 Missing key ⇒ silently dropped from the routing candidates, no warning (the picker shows it as a
 `setup:<provider>` signpost instead). Also check:
 
-- `enabled` — thirteen providers ship **disabled**: `github`, `mistral`, `zhipu`, `volcengine`, `longcat`,
+- `enabled` — twelve providers ship **disabled**: `mistral`, `zhipu`, `volcengine`, `longcat`,
   `nvidia`, `ovh`, plus the six 0.7.0 additions (`modelscope`, `xfyun`, `siliconflow`, `sambanova`,
   `huggingface`, `routeway`); turn them on in `providers.<id>.enabled`.
 - Hard gates — a model without `vision: true` is excluded from image requests, `toolCalling: false` from
@@ -964,7 +963,7 @@ model. The message names the exact environment variable and where to get a free 
 The id you asked for is not served by any provider in the pool. The message lists the three closest ids
 and tells you when the provider prefix you used is merely disabled. Common causes: a typo, an id copied
 from a provider's own docs that is not in this pool, or a model of a provider that ships disabled
-(`github`, `mistral`, `zhipu`, `volcengine`, `longcat`, `nvidia`, `ovh`, plus the six 0.7.0 additions) —
+(`mistral`, `zhipu`, `volcengine`, `longcat`, `nvidia`, `ovh`, plus the six 0.7.0 additions) —
 enable it under `config.providers.<id>` first. Use `auto` if you just want an answer.
 
 A pinned model that exists but is cooling down reports `MODEL_UNAVAILABLE` instead, with the exclusion
@@ -986,7 +985,7 @@ Stated plainly, so you know what you are relying on:
    been requested with a real key**, so everything else — every keyed provider, every quota number, every
    model id except the ones a public catalog publishes — is **documentation-level evidence**, not
    measurement.
-3. **Only credential-free requests were ever made.** `groq`, `cerebras`, `openrouter`, `github`, `mistral`,
+3. **Only credential-free requests were ever made.** `groq`, `cerebras`, `openrouter`, `mistral`,
    `nvidia` and the rest were contacted without credentials (status codes and public catalogs only, never a
    completion), so their `baseURL`s and model ids come from upstream's registry and migrations. Rate-limit
    numbers are the 2026-04 baseline and will drift.
@@ -1073,7 +1072,7 @@ providers:
 | DeepSeek Harness runtime | `0.2.0-rc.2` (written and verified against it) | Other `0.2.0-rc.x` builds are likely fine; only stable LLM seam APIs are used |
 | Node.js | `>= 22` | Matches the reference DSH plugins |
 | Provider APIs | OpenAI-compatible `POST {baseURL}/chat/completions` with SSE | Everything in the pool speaks the same wire |
-| `dsh-freellmapi` | `0.7.17` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
+| `dsh-freellmapi` | `0.7.18` | Zero runtime dependencies; the DSH LLM runtime is resolved at load time; peers are `@deepseek-ai/schemastery` (the config schema) and the optional `@deepseek-ai/cordis` |
 | freellmapi gateway | `v0.13.x` protocol surface | Only relevant in `gateway` mode |
 
 > Version-numbering note: the upstream gateway's releases are `v0.13.x`, while the npm CLI package

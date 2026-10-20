@@ -36,9 +36,12 @@
  *      declaring `32768` against a vendor-documented `8K`. Four times too large —
  *      but still *below* many confirmed pool values (`openrouter` 262 144, `kilo`
  *      1 000 000), and the smallest *confirmed* value in the pool is
- *      `github/openai/gpt-4.1 = 8000`. Any ceiling low enough to red-flag 32768
- *      must also red-flag confirmed data; any ceiling that spares the confirmed
- *      data lets the bug through.
+ *      `mistral/codestral-latest = 32000` (tied with `llm7/codestral-latest`).
+ *      Any ceiling low enough to red-flag 32768 must also red-flag that confirmed
+ *      32000; any ceiling that spares the confirmed data lets the bug through.
+ *      (This figure was 8000 via `github/openai/gpt-4.1` until that provider was
+ *      removed from the pool on 2026-10-20 after upstream retired it; the argument
+ *      is unchanged, the smallest confirmed value simply moved.)
  *   c. Root cause of both: `confidence` is a **provider-level** tag while
  *      provenance is a **value-level** fact, and the two legitimately disagree
  *      (`sambanova` is `speculative` as a provider yet its window is measured).
@@ -117,9 +120,13 @@ test('the invariant is `<=`, not `<`: parity between the two is legal', () => {
   // happens to contain today — a guard whose own test depends on live data would
   // start failing for reasons that have nothing to do with the guard.
   //
-  // The pool *does* currently sit at parity in three places
-  // (`github/openai/gpt-4.1` 8000/8000 and two `sambanova` entries), so tightening
-  // the guard to `<` would red-light sound data; this test fails if that happens.
+  // The pool *does* currently sit at parity in two places (both `sambanova`
+  // entries: 131072/131072 and 1048576/1048576), so tightening the guard to `<`
+  // would red-light sound data; this test fails if that happens.
+  //
+  // Parity used to be in three places; the third was `github/openai/gpt-4.1`
+  // (8000/8000) until that provider was removed on 2026-10-20 after upstream
+  // retired it. The count moved, the reasoning did not.
   const atParity = { provider: 'boundary', id: 'parity', contextWindow: 8192, maxTokens: 8192 }
   const oneUnder = { provider: 'boundary', id: 'under', contextWindow: 8192, maxTokens: 8191 }
 

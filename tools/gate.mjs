@@ -274,7 +274,14 @@ if (ONLINE) {
   // reported as reachable by one and transport-error by the other (E13). Any
   // inconsistency between the two gates' verdicts for one provider is called out
   // explicitly instead of being silently mixed.
-  const g7Rows = rows.map((r) => ({ ...r, verdict: verdictWithMethod(r) }))
+  // Assign the OUTER `g7Rows` (declared at module scope) rather than declaring a
+  // shadowing const. G10 below reuses these probe results, and a shadowing `const`
+  // left the outer binding empty — so G10 found no shared probe for ANY provider,
+  // recorded all 17 as "catalogue not readable (HTTP unknown)", and passed. The
+  // id-level check was therefore inert while reporting something that reads like
+  // "no credentials available". Found 2026-10-20; the plumbing assertion below now
+  // turns that condition red instead of green.
+  g7Rows = rows.map((r) => ({ ...r, verdict: verdictWithMethod(r) }))
   record('G7', 'pool reachability (informational, method-aware probes)', true,
     `${rows.length} probed, ${unreachable.length} unreachable${unreachable.length > 0 ? `: ${unreachable.map((r) => r.provider).join(', ')}` : ''}`)
   results[results.length - 1].rows = g7Rows
@@ -339,6 +346,21 @@ if (ONLINE) {
 
   const checked = coverage.filter((r) => r.checked === true)
   const unchecked = coverage.filter((r) => r.checked !== true)
+  // Plumbing sanity, added after G10 was found to be inert: every provider in
+  // `coverage` must have a G7 probe result to reuse. When the lookup silently
+  // missed (a shadowed `g7Rows` binding), ALL 17 missed, every provider fell into
+  // `unchecked`, G10 checked zero catalogues, and still passed — an assertion whose
+  // subject was empty (L22). This turns that into a red.
+  //
+  // Scoped to "the lookup found nothing", NOT to "unchecked": a provider that
+  // answered 200 but returned no recognisable model list is a legitimate
+  // `unchecked` (longcat does exactly that), and conflating the two would red-light
+  // sound behaviour.
+  const plumbingMisses = coverage.filter((r) => g7Rows.find((row) => row.provider === r.provider) === undefined)
+  assert(
+    plumbingMisses.length === 0,
+    `G10 could not find G7's probe result for: ${plumbingMisses.map((r) => r.provider).join(', ')} — the shared-probe reuse is broken`,
+  )
   // A dead id in a DEFAULT-ENABLED provider is a live defect: the plugin ships a
   // row the router may pick, and it 404s. Four dead OpenRouter ids (0.7.1) and two
   // dead groq ids (0.7.8) were both that shape, both found by a human — which is
