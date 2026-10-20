@@ -286,8 +286,17 @@ if (ONLINE) {
 // ---------------------------------------------------------------------------
 
 if (ONLINE) {
+  // Resolved ONCE for the whole online section, not inside the IIFE below. The
+  // coverage-gap and vision summaries further down live OUTSIDE that IIFE and call
+  // `providerDeclarations` themselves; when the import sat inside the IIFE they saw
+  // it as undefined and G7–G10 crashed with a ReferenceError instead of reporting.
+  //
+  // Found 2026-10-20 by the weekly automation failing: the offline gate was green
+  // (the broken line is online-only), so nothing in the test suite noticed. That is
+  // the shape this file's own G-gates are supposed to prevent — a red nobody catches
+  // because it only appears on the network path.
+  const { providerDeclarations } = await import(moduleUrl('lib/providers.js'))
   const coverage = await (async () => {
-    const { providerDeclarations } = await import(moduleUrl('lib/providers.js'))
     const rows = []
     for (const d of providerDeclarations({})) {
       // Reuse the shared probe result from G7 so one provider is never probed
